@@ -47,7 +47,8 @@ export default function BookSlot() {
       const { data } = await api.post('/bookings', {
         centreId: centre._id,
         crop: CROPS.find((c) => c.id === crop)?.en || crop,
-        quantityBand: qty <= 5 ? '0-5q' : qty <= 15 ? '5-15q' : qty <= 30 ? '15-30q' : '30-50q',
+        // Map numeric quantity to backend enum: '0-5q' | '5-15q' | '15q+'
+        quantityBand: qty <= 5 ? '0-5q' : qty <= 15 ? '5-15q' : '15q+',
         arrivalWindowStart: windowStart.toISOString(),
         arrivalWindowEnd: windowEnd.toISOString(),
       });

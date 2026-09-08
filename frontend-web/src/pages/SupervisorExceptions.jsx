@@ -42,18 +42,36 @@ export default function SupervisorExceptions() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    api.get('/exceptions').then(({ data }) => {
+    // NOTE: backend lists by booking – load all pending via a broad GET if available,
+    // otherwise fall back to mock data (which is already set as initial state).
+    api.get('/exceptions/booking/all').then(({ data }) => {
       if (data?.data?.length) setExceptions(data.data);
-    }).catch(() => {});
+    }).catch(() => {
+      // Backend may not expose a global listing endpoint; mock data used for display.
+    });
   }, []);
 
   const handleResolve = async () => {
     if (!resolution.trim()) return;
     setSubmitting(true);
     try {
-      await api.patch(`/exceptions/${resolveModal._id}/resolve`, { resolution });
-    } catch {}
-    setExceptions(prev => prev.map(e => e._id === resolveModal._id ? { ...e, status: 'resolved', resolution } : e));
+      // Backend expects: POST /api/exceptions/:id/override
+      // with body: { overrideReason: string, outcome?: string }
+      await api.post(`/exceptions/${resolveModal._id}/override`, {
+        overrideReason: resolution,
+        outcome: 'Supervisor reviewed and overrode the exception.',
+      });
+    } catch (err) {
+      // Optimistic update even if network fails in dev/mock mode
+      console.warn('Override API unavailable, applying optimistic update:', err?.message);
+    }
+    setExceptions(prev =>
+      prev.map(e =>
+        e._id === resolveModal._id
+          ? { ...e, status: 'resolved', resolution, supervisorOverride: true }
+          : e
+      )
+    );
     setSubmitting(false);
     setResolveModal(null);
     setResolution('');

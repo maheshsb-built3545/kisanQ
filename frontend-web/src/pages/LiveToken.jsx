@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import api from '../api';
 
 const API_BASE = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
+const POLL_INTERVAL_MS = 10_000; // 10s HTTP fallback when WS disconnected
 
 export default function LiveToken() {
   const navigate = useNavigate();
@@ -19,22 +20,85 @@ export default function LiveToken() {
     estimatedWait: 22,
     status: 'queued',
     lane: 'Gate No. 2 → Lane B → Weighbridge W3',
+    centreId: booking?.centreId || null,
   });
   const [timer, setTimer] = useState(tokenData.estimatedWait * 60);
+  const [wsConnected, setWsConnected] = useState(false);
+  const pollRef = useRef(null);
 
+  // ── HTTP polling fallback ─────────────────────────────────────────────────
+  const pollPosition = useCallback(async () => {
+    if (!booking?._id || !tokenData.centreId) return;
+    try {
+      const { data } = await api.get(
+        `/queue/${tokenData.centreId}/position/${booking._id}`
+      );
+      if (data?.data) {
+        setTokenData((prev) => ({ ...prev, ...data.data }));
+        setTimer((data.data.estimatedWait || 0) * 60);
+      }
+    } catch {
+      // Network error during poll — silently retry next tick
+    }
+  }, [booking, tokenData.centreId]);
+
+  const startPolling = useCallback(() => {
+    if (pollRef.current) return; // already running
+    pollPosition(); // immediate fetch
+    pollRef.current = setInterval(pollPosition, POLL_INTERVAL_MS);
+  }, [pollPosition]);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  // ── Socket.IO with automatic fallback ────────────────────────────────────
   useEffect(() => {
-    const id = setInterval(() => setTimer((t) => (t > 0 ? t - 1 : 0)), 1000);
-    const socket = io(API_BASE, { auth: { token: localStorage.getItem('kq_token') } });
+    const timerInterval = setInterval(
+      () => setTimer((t) => (t > 0 ? t - 1 : 0)),
+      1000
+    );
+
+    const socket = io(API_BASE, {
+      auth: { token: localStorage.getItem('kq_token') },
+      reconnectionAttempts: 5,
+      reconnectionDelay: 2000,
+    });
+
+    socket.on('connect', () => {
+      setWsConnected(true);
+      stopPolling(); // WS is live — stop HTTP polling
+    });
+
+    socket.on('disconnect', () => {
+      setWsConnected(false);
+      startPolling(); // WS dropped — fall back to HTTP polling
+    });
+
+    socket.on('connect_error', () => {
+      setWsConnected(false);
+      startPolling(); // Initial WS failure — fall back immediately
+    });
+
     if (booking?._id) {
       socket.on(`queue:${booking._id}:update`, (data) => {
         setTokenData((prev) => ({ ...prev, ...data }));
         setTimer((data.estimatedWait || 0) * 60);
       });
     }
-    return () => { clearInterval(id); socket.disconnect(); };
-  }, [booking]);
 
-  const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    return () => {
+      clearInterval(timerInterval);
+      stopPolling();
+      socket.disconnect();
+    };
+  }, [booking, startPolling, stopPolling]);
+
+  const fmt = (s) =>
+    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
   const STATUS_LABEL = {
     queued:    { label: 'कतार में • In Queue',     cls: 'bg-tertiary-fixed text-on-tertiary-fixed' },
@@ -57,7 +121,14 @@ export default function LiveToken() {
               <span className="block text-xs text-on-surface-variant">Digital Gate Token</span>
             </div>
           </div>
-          <div className={`px-3 py-2 rounded-xl text-sm font-bold ${st.cls}`}>{st.label}</div>
+          <div className="flex items-center gap-2">
+            {/* WS connectivity indicator */}
+            <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-extrabold ${wsConnected ? 'bg-secondary-fixed text-on-secondary-fixed' : 'bg-tertiary-fixed text-on-tertiary-fixed'}`}>
+              <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-secondary animate-ping' : 'bg-tertiary-container'}`} />
+              {wsConnected ? 'Live' : 'Polling'}
+            </div>
+            <div className={`px-3 py-2 rounded-xl text-sm font-bold ${st.cls}`}>{st.label}</div>
+          </div>
         </header>
 
         {/* GATE PASS */}
@@ -94,17 +165,20 @@ export default function LiveToken() {
             {/* QR placeholder */}
             <div className="w-28 h-28 bg-on-surface rounded-xl flex items-center justify-center overflow-hidden shadow-md">
               <svg viewBox="0 0 100 100" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
-                {/* Minimal QR-like pattern */}
-                {[0,1,2,3,4,5,6].map(r => [0,1,2,3,4,5,6].map(c => {
-                  const p = [
-                    [0,0],[0,1],[0,2],[0,3],[0,4],[0,5],[0,6],
-                    [6,0],[6,1],[6,2],[6,3],[6,4],[6,5],[6,6],
-                    [1,0],[2,0],[3,0],[4,0],[5,0],[1,6],[2,6],[3,6],[4,6],[5,6],
-                    [0,6],[6,6],[2,2],[3,2],[4,2],[2,3],[3,3],[4,3],[2,4],[3,4],[4,4],
-                  ];
-                  const on = p.some(([pr,pc]) => pr === r && pc === c) || Math.random() > 0.55;
-                  return on ? <rect key={`${r}-${c}`} x={c*13+4} y={r*13+4} width="11" height="11" fill="#faf8ff" /> : null;
-                }))}
+                {[0, 1, 2, 3, 4, 5, 6].map((r) =>
+                  [0, 1, 2, 3, 4, 5, 6].map((c) => {
+                    const p = [
+                      [0,0],[0,1],[0,2],[0,3],[0,4],[0,5],[0,6],
+                      [6,0],[6,1],[6,2],[6,3],[6,4],[6,5],[6,6],
+                      [1,0],[2,0],[3,0],[4,0],[5,0],[1,6],[2,6],[3,6],[4,6],[5,6],
+                      [0,6],[6,6],[2,2],[3,2],[4,2],[2,3],[3,3],[4,3],[2,4],[3,4],[4,4],
+                    ];
+                    const on = p.some(([pr, pc]) => pr === r && pc === c) || Math.random() > 0.55;
+                    return on ? (
+                      <rect key={`${r}-${c}`} x={c * 13 + 4} y={r * 13 + 4} width="11" height="11" fill="#faf8ff" />
+                    ) : null;
+                  })
+                )}
               </svg>
             </div>
           </div>
@@ -142,7 +216,10 @@ export default function LiveToken() {
                 <span className="block text-sm font-bold text-on-surface">आपकी कतार स्थिति</span>
                 <div className="flex items-center gap-1.5 mt-1.5">
                   {[...Array(Math.min(tokenData.position, 8))].map((_, i) => (
-                    <span key={i} className={`flex-1 h-2 rounded-full transition-all ${i < Math.max(0, tokenData.position - 3) ? 'bg-error' : 'bg-tertiary-fixed'}`} />
+                    <span
+                      key={i}
+                      className={`flex-1 h-2 rounded-full transition-all ${i < Math.max(0, tokenData.position - 3) ? 'bg-error' : 'bg-tertiary-fixed'}`}
+                    />
                   ))}
                 </div>
               </div>
