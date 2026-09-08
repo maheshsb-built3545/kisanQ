@@ -40,9 +40,6 @@ const farmerSchema = new mongoose.Schema(
   }
 );
 
-// Index phone explicitly
-farmerSchema.index({ phone: 1 });
-
 const Farmer = mongoose.model('Farmer', farmerSchema);
 
 module.exports = Farmer;
