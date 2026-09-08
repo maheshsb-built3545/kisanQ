@@ -7,6 +7,7 @@ const connectDB = require('./config/db');
 const routes = require('./routes');
 const logger = require('./utils/logger');
 const { errorResponse } = require('./utils/apiResponse');
+const { initQueueSocket } = require('./socket/queue.socket');
 
 // Load environment variables
 dotenv.config();
@@ -37,20 +38,8 @@ const io = new Server(server, {
   }
 });
 
-// Socket.IO Connection Handler
-io.on('connection', (socket) => {
-  logger.info(`[Socket.IO] Client connected: ${socket.id}`);
-
-  // Join centre room for live queue updates
-  socket.on('join_centre_queue', (centreId) => {
-    socket.join(`centre_${centreId}`);
-    logger.info(`[Socket.IO] Socket ${socket.id} joined room centre_${centreId}`);
-  });
-
-  socket.on('disconnect', () => {
-    logger.info(`[Socket.IO] Client disconnected: ${socket.id}`);
-  });
-});
+// Initialize modular Socket.IO queue handler
+initQueueSocket(io);
 
 // Attach io to request object for use in controllers/services if needed
 app.use((req, res, next) => {

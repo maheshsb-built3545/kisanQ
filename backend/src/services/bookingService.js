@@ -279,3 +279,4 @@ const bookingService = {
 };
 
 module.exports = bookingService;
+module.exports._inMemoryBookings = inMemoryBookings;
