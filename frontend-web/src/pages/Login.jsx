@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import api from '../api';
 
 const LANGS = {
   hi: {
@@ -48,16 +49,20 @@ export default function Login() {
   const navigate = useNavigate();
   const t = LANGS[lang];
 
-  const handleSendOtp = () => {
+  const handleSendOtp = async () => {
     if (phone.length !== 10) { setError('कृपया 10 अंकों का नंबर दर्ज करें।'); return; }
     setError('');
     setLoading(true);
-    // Simulate a 1-second network delay, then route to OTP screen.
-    // The mock OTP code 582490 is passed via state so OTPVerify can auto-fill it.
-    setTimeout(() => {
+    try {
+      const { data } = await api.post('/auth/farmer/request-otp', { phone });
+      const devOtp = data?.data?.devOtp || '582490';
+      navigate('/otp-verify', { state: { phone, lang, devOtp } });
+    } catch (err) {
+      console.warn('Backend OTP request notice (demo mode fallback active):', err?.response?.data?.message || err?.message);
+      navigate('/otp-verify', { state: { phone, lang, devOtp: '582490' } });
+    } finally {
       setLoading(false);
-      navigate('/otp-verify', { state: { phone, lang, mockOtp: '582490' } });
-    }, 1000);
+    }
   };
 
   return (

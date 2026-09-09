@@ -34,19 +34,31 @@ export default function GuardTerminal() {
   const scanRef = useRef(null);
 
   useEffect(() => {
-    api.get('/queue').then(({ data }) => {
-      if (data?.data?.length) setQueue(data.data);
+    const centreId = '65f1a2b3c4d5e6f7a8b9c0d1';
+    api.get(`/queue/live/${centreId}`).then(({ data }) => {
+      if (data?.data?.entries) setQueue(data.data.entries);
+      else if (data?.data?.length) setQueue(data.data);
     }).catch(() => {});
 
     const socket = io(API_BASE, { auth: { token: localStorage.getItem('kq_token') } });
-    socket.on('queue:update', (entries) => setQueue(entries));
+    socket.on('connect', () => {
+      socket.emit('join_centre_queue', centreId);
+    });
+
+    const handleUpdate = (data) => {
+      if (Array.isArray(data)) setQueue(data);
+      else if (data?.entries) setQueue(data.entries);
+    };
+
+    socket.on('queue_update', handleUpdate);
+    socket.on('queue:update', handleUpdate);
     return () => socket.disconnect();
   }, []);
 
   const visible = activeFilter === 'all' ? queue : queue.filter((q) => q.status === activeFilter);
 
   const handleCheckin = async (token) => {
-    try { await api.patch(`/queue/${token}/checkin`); } catch { /* optimistic */ }
+    try { await api.post(`/queue/${token}/check-in`); } catch { /* optimistic */ }
     setQueue((q) => q.map((e) => e.token === token ? { ...e, status: 'arrived' } : e));
     if (scannedEntry?.token === token) setScannedEntry((p) => p ? { ...p, status: 'arrived' } : p);
   };

@@ -6,9 +6,9 @@ export default function OTPVerify() {
   const navigate = useNavigate();
   const { state } = useLocation();
   const phone = state?.phone || '';
-  const mockOtp = state?.mockOtp || '';
-  // Pre-split mockOtp into 6 digit slots; pads with empty string if shorter
-  const initialDigits = Array.from({ length: 6 }, (_, i) => mockOtp[i] || '');
+  const devOtp = state?.devOtp || state?.mockOtp || '';
+  // Pre-split devOtp into 6 digit slots; pads with empty string if shorter
+  const initialDigits = Array.from({ length: 6 }, (_, i) => devOtp[i] || '');
   const [otp, setOtp] = useState(initialDigits);
   const [timer, setTimer] = useState(48);
   const [loading, setLoading] = useState(false);
@@ -21,12 +21,12 @@ export default function OTPVerify() {
     return () => clearInterval(id);
   }, []);
 
-  // Auto-focus the last filled digit when mockOtp is pre-loaded
+  // Auto-focus the last filled digit when devOtp is pre-loaded
   useEffect(() => {
-    if (mockOtp && inputRefs.current[5]) {
+    if (devOtp && inputRefs.current[5]) {
       inputRefs.current[5].focus();
     }
-  }, [mockOtp]);
+  }, [devOtp]);
 
   const handleChange = (idx, val) => {
     if (!/^\d?$/.test(val)) return;
@@ -43,7 +43,8 @@ export default function OTPVerify() {
   };
 
   const autoFill = () => {
-    setOtp(['5', '8', '2', '4', '9', '0']);
+    const filled = devOtp ? Array.from({ length: 6 }, (_, i) => devOtp[i] || '') : ['5', '8', '2', '4', '9', '0'];
+    setOtp(filled);
     inputRefs.current[5]?.focus();
   };
 
@@ -53,10 +54,16 @@ export default function OTPVerify() {
     setError(''); setLoading(true);
     try {
       const { data } = await api.post('/auth/farmer/verify-otp', { phone, otp: code });
-      if (data?.data?.token) localStorage.setItem('kq_token', data.data.token);
+      if (data?.data?.token) {
+        localStorage.setItem('kq_token', data.data.token);
+        if (data?.data?.user) {
+          localStorage.setItem('kq_user', JSON.stringify(data.data.user));
+        }
+      }
       navigate('/mandi-selection');
-    } catch {
-      // Dev mock: save a dummy JWT so api.js interceptor treats user as authenticated
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.message || 'ओटीपी सत्यापन विफल हुआ।';
+      console.warn('OTP verification notice (demo fallback active):', msg);
       localStorage.setItem('kq_token', 'mock_token');
       navigate('/mandi-selection');
     } finally { setLoading(false); }

@@ -17,17 +17,18 @@ api.interceptors.request.use(
 );
 
 // ── Response interceptor: handle 401 Unauthorized globally ─────────────────
-// DEMO MODE: 401 redirect disabled. In production, uncomment the redirect.
-// During the hackathon, mock API calls return 401 without a real JWT — we
-// console.warn instead of crashing the entire app back to login.
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('kq_token');
-      // ── Production: uncomment the line below ──
-      // window.location.href = '/';
-      console.warn('[KisanQ] 401 Unauthorized — demo mode, skipping redirect.');
+      localStorage.removeItem('kq_user');
+      const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
+      if (isDemoMode) {
+        console.warn('[KisanQ] 401 Unauthorized — VITE_DEMO_MODE active, skipping redirect.');
+      } else {
+        window.location.href = '/farmer-login';
+      }
     }
     return Promise.reject(error);
   }

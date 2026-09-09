@@ -8,7 +8,7 @@ const { checkRole } = require('../middleware/rbac.middleware');
 router.get(
   '/:bookingId/log',
   authenticate,
-  checkRole('operator', 'staff', 'supervisor', 'admin'),
+  checkRole('operator', 'staff', 'supervisor', 'district_admin', 'auditor'),
   notificationController.getNotificationLog
 );
 
@@ -16,7 +16,7 @@ router.get(
 router.post(
   '/send',
   authenticate,
-  checkRole('operator', 'staff', 'supervisor', 'admin'),
+  checkRole('operator', 'staff', 'supervisor', 'district_admin', 'auditor'),
   notificationController.sendNotification
 );
 
@@ -24,7 +24,7 @@ router.post(
 router.post(
   '/:id/retry',
   authenticate,
-  checkRole('operator', 'staff', 'supervisor', 'admin'),
+  checkRole('operator', 'staff', 'supervisor', 'district_admin', 'auditor'),
   notificationController.retryNotification
 );
 

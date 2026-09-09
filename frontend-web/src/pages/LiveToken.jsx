@@ -71,6 +71,9 @@ export default function LiveToken() {
     socket.on('connect', () => {
       setWsConnected(true);
       stopPolling(); // WS is live — stop HTTP polling
+      if (booking?.centreId) {
+        socket.emit('join_centre_queue', booking.centreId);
+      }
     });
 
     socket.on('disconnect', () => {
@@ -83,12 +86,17 @@ export default function LiveToken() {
       startPolling(); // Initial WS failure — fall back immediately
     });
 
-    if (booking?._id) {
-      socket.on(`queue:${booking._id}:update`, (data) => {
+    const handleQueueUpdate = (data) => {
+      if (data) {
         setTokenData((prev) => ({ ...prev, ...data }));
-        setTimer((data.estimatedWait || 0) * 60);
-      });
-    }
+        if (data.estimatedWait !== undefined) {
+          setTimer((data.estimatedWait || 0) * 60);
+        }
+      }
+    };
+
+    socket.on('queue_update', handleQueueUpdate);
+    socket.on('queue:update', handleQueueUpdate);
 
     return () => {
       clearInterval(timerInterval);

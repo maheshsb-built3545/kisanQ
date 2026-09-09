@@ -45,12 +45,14 @@ const broadcastQueueUpdate = (io, centreId, queueData) => {
     return;
   }
   const room = `centre_${centreId}`;
-  io.to(room).emit('queue_update', {
+  const payload = {
     centreId,
     updatedAt: new Date().toISOString(),
     ...queueData
-  });
-  logger.info(`[Socket.IO] Broadcast queue_update to room ${room}`);
+  };
+  io.to(room).emit('queue_update', payload);
+  io.to(room).emit('queue:update', payload);
+  logger.info(`[Socket.IO] Broadcast queue_update & queue:update to room ${room}`);
 };
 
 module.exports = {

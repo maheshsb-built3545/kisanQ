@@ -34,11 +34,13 @@ export default function BookSlot() {
   const [skipVehicle, setSkipVehicle] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const today = new Date();
   const dateStr = today.toISOString().split('T')[0];
 
   const handleConfirm = async () => {
+    setError('');
     setLoading(true);
     const slot = SLOTS[selectedSlot];
     const windowStart = new Date(`${dateStr}T${slot.start}:00.000Z`);
@@ -61,10 +63,14 @@ export default function BookSlot() {
         arrivalWindowEnd: windowEnd.toISOString(),
         channel: 'app',
       });
-      navigate('/live-token', { state: { booking: data?.data } });
+      if (data?.data) {
+        navigate('/live-token', { state: { booking: data.data } });
+      } else {
+        throw new Error('बुकिंग प्रतिक्रिया अमान्य है।');
+      }
     } catch (err) {
-      console.warn('Backend booking API notice (demo mode active):', err?.response?.data?.message || err?.message);
-      navigate('/live-token', { state: { booking: { tokenNumber: 'KQ-108', centreId: validCentreId, _id: 'mock-booking-id' } } });
+      const errMsg = err?.response?.data?.message || err?.message || 'स्लॉट बुकिंग विफल हुई। कृपया पुन: प्रयास करें।';
+      setError(errMsg);
     } finally { setLoading(false); }
   };
 
@@ -246,6 +252,13 @@ export default function BookSlot() {
             <p className="text-sm text-on-surface-variant mt-1">कृपया चुने गए समय स्लॉट से 15 मिनट पूर्व मंडी गेट नंबर 2 पर पहुंचे।</p>
           </div>
         </section>
+
+        {error && (
+          <div className="p-4 bg-error-container text-on-error-container rounded-xl text-sm font-bold flex items-center gap-2 shadow-sm">
+            <span className="material-symbols-outlined text-xl shrink-0">error</span>
+            <span>{error}</span>
+          </div>
+        )}
 
         {/* CTA */}
         <div className="sticky bottom-2 z-20">
