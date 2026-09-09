@@ -6,6 +6,33 @@ const logger = require('../utils/logger');
 const inMemoryBookings = new Map();
 const inMemoryAuditLogs = [];
 
+// Seed default weighmaster / guard desk demo bookings
+inMemoryBookings.set('65f1a2b3c4d5e6f7a8b9c0d1', {
+  _id: '65f1a2b3c4d5e6f7a8b9c0d1',
+  tokenNumber: 'KQ-108',
+  farmerId: '65f1a2b3c4d5e6f7a8b9c001',
+  centreId: '65f1a2b3c4d5e6f7a8b9c002',
+  farmerName: 'रामचंद्र पाटील',
+  crop: 'Red Onion',
+  quantityBand: '15q+',
+  status: 'CHECKED_IN',
+  createdAt: new Date(),
+  updatedAt: new Date()
+});
+
+inMemoryBookings.set('65f1a2b3c4d5e6f7a8b9c0d2', {
+  _id: '65f1a2b3c4d5e6f7a8b9c0d2',
+  tokenNumber: 'KQ-107',
+  farmerId: '65f1a2b3c4d5e6f7a8b9c003',
+  centreId: '65f1a2b3c4d5e6f7a8b9c002',
+  farmerName: 'सुरेश जाधव',
+  crop: 'Yellow Maize',
+  quantityBand: '15q+',
+  status: 'CHECKED_IN',
+  createdAt: new Date(),
+  updatedAt: new Date()
+});
+
 const bookingService = {
   /**
    * Reserve an arrival window slot with deduplication and capacity checks

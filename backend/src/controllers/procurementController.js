@@ -4,20 +4,23 @@ const { successResponse, errorResponse } = require('../utils/apiResponse');
 const procurementController = {
   recordInspection: async (req, res) => {
     try {
-      const result = await procurementService.recordInspection(req.body);
-      return successResponse(res, result, 'Inspection recording endpoint initialized', 201);
+      const result = await procurementService.recordInspection(req.body, req.io);
+      return successResponse(res, result, 'Inspection recorded successfully', 200);
     } catch (error) {
-      return errorResponse(res, error.message);
+      const statusCode = error.message && error.message.includes('not found') ? 404 : 400;
+      return errorResponse(res, error.message, statusCode);
     }
   },
   recordWeight: async (req, res) => {
     try {
-      const result = await procurementService.recordWeight(req.body);
-      return successResponse(res, result, 'Weight recording endpoint initialized', 201);
+      const result = await procurementService.recordWeight(req.body, req.io);
+      return successResponse(res, result, 'Weight recorded successfully', 200);
     } catch (error) {
-      return errorResponse(res, error.message);
+      const statusCode = error.message && error.message.includes('not found') ? 404 : 400;
+      return errorResponse(res, error.message, statusCode);
     }
   }
 };
 
 module.exports = procurementController;
+

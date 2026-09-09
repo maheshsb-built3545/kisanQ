@@ -60,6 +60,8 @@ const bookingSchema = new mongoose.Schema(
           'BOOKED',
           'CONFIRMED',
           'CHECKED_IN',
+          'INSPECTED',
+          'WEIGHED_READY_FOR_AUCTION',
           'ELIGIBLE_FOR_RELEASE',
           'RELEASED',
           'CANCELLED',
@@ -68,6 +70,30 @@ const bookingSchema = new mongoose.Schema(
         message: '{VALUE} is not a valid booking status'
       },
       default: 'BOOKED'
+    },
+    grade: {
+      type: String,
+      trim: true
+    },
+    moisturePercentage: {
+      type: Number
+    },
+    inspectorNotes: {
+      type: String,
+      trim: true
+    },
+    grossWeight: {
+      type: Number
+    },
+    tareWeight: {
+      type: Number
+    },
+    netWeight: {
+      type: Number
+    },
+    weighbridgeId: {
+      type: String,
+      trim: true
     },
     channel: {
       type: String,
