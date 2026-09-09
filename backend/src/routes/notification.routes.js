@@ -12,19 +12,19 @@ router.get(
   notificationController.getNotificationLog
 );
 
-// Dispatch a notification
+// Dispatch a notification (restricted to supervisor and district_admin)
 router.post(
   '/send',
   authenticate,
-  checkRole('operator', 'staff', 'supervisor', 'district_admin', 'auditor'),
+  checkRole('supervisor', 'district_admin'),
   notificationController.sendNotification
 );
 
-// Retry a notification
+// Retry a notification (restricted to supervisor and district_admin)
 router.post(
   '/:id/retry',
   authenticate,
-  checkRole('operator', 'staff', 'supervisor', 'district_admin', 'auditor'),
+  checkRole('supervisor', 'district_admin'),
   notificationController.retryNotification
 );
 

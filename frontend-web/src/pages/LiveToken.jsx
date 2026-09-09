@@ -86,17 +86,14 @@ export default function LiveToken() {
       startPolling(); // Initial WS failure — fall back immediately
     });
 
-    const handleQueueUpdate = (data) => {
+    socket.on('queue:update', (data) => {
       if (data) {
         setTokenData((prev) => ({ ...prev, ...data }));
         if (data.estimatedWait !== undefined) {
           setTimer((data.estimatedWait || 0) * 60);
         }
       }
-    };
-
-    socket.on('queue_update', handleQueueUpdate);
-    socket.on('queue:update', handleQueueUpdate);
+    });
 
     return () => {
       clearInterval(timerInterval);

@@ -45,13 +45,10 @@ export default function GuardTerminal() {
       socket.emit('join_centre_queue', centreId);
     });
 
-    const handleUpdate = (data) => {
+    socket.on('queue:update', (data) => {
       if (Array.isArray(data)) setQueue(data);
       else if (data?.entries) setQueue(data.entries);
-    };
-
-    socket.on('queue_update', handleUpdate);
-    socket.on('queue:update', handleUpdate);
+    });
     return () => socket.disconnect();
   }, []);
 
