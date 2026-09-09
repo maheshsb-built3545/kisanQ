@@ -1,4 +1,5 @@
-﻿import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { ROUTES } from '../constants/routes';
 
 export default function Landing() {
   const navigate = useNavigate();
@@ -6,88 +7,93 @@ export default function Landing() {
   return (
     <main className="flex flex-col min-h-screen bg-surface font-jakarta overflow-hidden relative">
 
-      {/* Background decorative circles */}
-      <div className="absolute -top-24 -right-24 w-72 h-72 rounded-full bg-primary opacity-5 blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-24 -left-24 w-72 h-72 rounded-full bg-secondary opacity-5 blur-3xl pointer-events-none" />
+      {/* Hero Section */}
+      <div className="bg-gradient-to-b from-primary/10 via-surface to-surface px-4 pt-10 pb-8 flex flex-col items-center text-center">
+        <div className="inline-flex items-center gap-2 bg-primary-container px-3.5 py-1.5 rounded-full mb-6 shadow-sm">
+          <span className="w-2 h-2 rounded-full bg-primary animate-ping" />
+          <span className="text-xs font-black text-on-primary uppercase tracking-widest">SIH26032 • National e-Mandi Platform</span>
+        </div>
 
-      <div className="flex flex-col w-full max-w-md mx-auto px-6 py-8 gap-6 min-h-screen relative z-10">
+        <div className="w-20 h-20 rounded-3xl bg-primary text-on-primary flex items-center justify-center text-4xl font-black shadow-xl shadow-primary/20 mb-5">
+          KQ
+        </div>
 
-        {/* Hero */}
-        <div className="flex-1 flex flex-col items-center justify-center text-center gap-5 pt-8">
-          {/* Logo mark */}
-          <div className="relative">
-            <div className="w-24 h-24 rounded-3xl bg-primary flex items-center justify-center shadow-2xl shadow-primary/30">
-              <span className="text-on-primary text-4xl font-black tracking-tight">KQ</span>
-            </div>
-            <span className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-secondary-fixed flex items-center justify-center shadow-md">
-              <span className="material-symbols-outlined text-on-secondary-fixed text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
-            </span>
-          </div>
+        <h1 className="text-3xl font-black text-on-surface tracking-tight leading-none mb-2">
+          Kisan<span className="text-primary">Q</span>
+        </h1>
+        <p className="text-sm font-extrabold text-secondary uppercase tracking-widest mb-4">
+          डिजिटल मंडी कतार व टोकन प्रणाली
+        </p>
 
-          <div>
-            <h1 className="text-4xl font-black text-primary tracking-tight">KisanQ</h1>
-            <p className="text-sm font-extrabold text-secondary uppercase tracking-widest mt-1">e-Mandi Digital Gateway</p>
-            <p className="text-xs text-on-surface-variant mt-2">SIH 2026 • नासिक कृषि उपज मंडी</p>
-          </div>
+        <p className="text-sm text-on-surface-variant max-w-xs leading-relaxed mb-8">
+          किसान भाइयों के लिए बिना कतार के सीधे मंडी प्रवेश, पारदर्शी तौल और सुरक्षित टोकन आरक्षण।
+        </p>
 
-          {/* Trust strip */}
-          <div className="flex items-center gap-4 bg-surface-container-low px-5 py-3 rounded-2xl shadow-sm">
-            {[['shield', 'Govt. Backed'], ['lock', 'Zero Aadhaar'], ['support_agent', '24x7 Help']].map(([icon, label]) => (
-              <div key={label} className="flex flex-col items-center gap-1">
-                <span className="material-symbols-outlined text-secondary text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>{icon}</span>
-                <span className="text-[10px] font-extrabold text-on-surface-variant uppercase tracking-wide text-center leading-tight">{label}</span>
+        {/* Action Gateways */}
+        <div className="w-full max-w-sm flex flex-col gap-3">
+          <button
+            onClick={() => navigate(ROUTES.FARMER_LOGIN)}
+            className="w-full h-16 bg-primary text-on-primary font-bold text-base rounded-2xl shadow-xl shadow-primary/25 flex items-center justify-between px-5 active:scale-[0.98] transition-all"
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🌾</span>
+              <div className="text-left">
+                <span className="block text-sm font-bold leading-tight">किसान पोर्टल / Farmer Portal</span>
+                <span className="block text-[11px] font-normal opacity-80">स्लॉट बुक करें व टोकन देखें</span>
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Role Selection */}
-        <div className="flex flex-col gap-4 pb-8">
-          <p className="text-center text-sm font-bold text-on-surface-variant uppercase tracking-widest">आप कौन हैं? / Select Your Role</p>
-
-          {/* Farmer CTA — primary, full width, large */}
-          <button
-            id="landing-farmer-btn"
-            onClick={() => navigate('/farmer-login')}
-            className="w-full bg-primary text-on-primary rounded-2xl p-6 flex items-center gap-5 shadow-xl shadow-primary/25 active:scale-95 transition-all text-left"
-          >
-            <div className="w-16 h-16 rounded-2xl bg-on-primary/10 flex items-center justify-center shrink-0">
-              <span className="text-4xl">👨‍🌾</span>
             </div>
-            <div className="flex-1">
-              <span className="block text-xl font-black">मैं एक किसान हूँ</span>
-              <span className="block text-sm text-on-primary/70 mt-0.5">I am a Farmer</span>
-              <span className="block text-xs text-on-primary/50 mt-1.5">टोकन बुक करें • कतार देखें • भुगतान पाएं</span>
-            </div>
-            <span className="material-symbols-outlined text-on-primary/50 text-3xl">arrow_forward_ios</span>
+            <span className="material-symbols-outlined text-2xl">arrow_forward</span>
           </button>
 
-          {/* Staff CTA — secondary */}
           <button
-            id="landing-staff-btn"
-            onClick={() => navigate('/staff-login')}
-            className="w-full bg-surface-container-lowest text-on-surface rounded-2xl p-5 flex items-center gap-4 shadow-md border border-outline-variant/30 active:scale-95 transition-all text-left"
+            onClick={() => navigate(ROUTES.STAFF_LOGIN)}
+            className="w-full h-14 bg-surface-container-lowest border border-outline-variant/30 text-on-surface font-bold text-sm rounded-2xl shadow-md flex items-center justify-between px-5 active:scale-[0.98] transition-all hover:bg-surface-container-low"
           >
-            <div className="w-14 h-14 rounded-2xl bg-primary-container flex items-center justify-center shrink-0">
-              <span className="text-3xl">🏛️</span>
+            <div className="flex items-center gap-3">
+              <span className="text-xl">🛡️</span>
+              <span className="text-sm font-bold">मंडी कर्मचारी पोर्टल / Staff Login</span>
             </div>
-            <div className="flex-1">
-              <span className="block text-lg font-bold text-on-surface">मंडी अधिकारी</span>
-              <span className="block text-sm text-on-surface-variant">Mandi Staff / Admin</span>
-              <span className="block text-xs text-on-surface-variant/60 mt-1">Gate Guard • Supervisor • Auctioneer</span>
-            </div>
-            <span className="material-symbols-outlined text-on-surface-variant text-2xl">arrow_forward_ios</span>
+            <span className="material-symbols-outlined text-xl text-on-surface-variant">admin_panel_settings</span>
           </button>
-
-          {/* Footer */}
-          <div className="text-center pt-2">
-            <p className="text-xs text-on-surface-variant">
-              समस्या? <a href="tel:18001801551" className="text-primary font-bold">1800-180-1551</a> (Toll Free • 24x7)
-            </p>
-          </div>
         </div>
-
       </div>
+
+      {/* Feature Badges */}
+      <div className="px-4 max-w-sm mx-auto w-full pb-10 space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div
+            onClick={() => navigate(ROUTES.GUARD_TERMINAL)}
+            className="bg-surface-container-lowest p-4 rounded-2xl shadow-sm cursor-pointer hover:shadow-md transition-shadow border border-outline-variant/10"
+          >
+            <span className="text-2xl block mb-1">🚪</span>
+            <span className="text-xs font-extrabold text-on-surface block">द्वारपाल टर्मिनल</span>
+            <span className="text-[10px] text-on-surface-variant block">Gate Check-in &amp; QR</span>
+          </div>
+
+          <div
+            onClick={() => navigate(ROUTES.SUPERVISOR_EXCEPTIONS)}
+            className="bg-surface-container-lowest p-4 rounded-2xl shadow-sm cursor-pointer hover:shadow-md transition-shadow border border-outline-variant/10"
+          >
+            <span className="text-2xl block mb-1">👨‍💼</span>
+            <span className="text-xs font-extrabold text-on-surface block">पर्यवेक्षक कंसोल</span>
+            <span className="text-[10px] text-on-surface-variant block">Exceptions &amp; Dispute</span>
+          </div>
+        </div>
+
+        <div className="bg-surface-container-low rounded-2xl p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="material-symbols-outlined text-secondary text-2xl">support_agent</span>
+            <div>
+              <span className="block text-xs font-extrabold text-on-surface">24x7 किसान हेल्पलाइन</span>
+              <span className="block text-xs text-on-surface-variant">Toll-Free Assistance</span>
+            </div>
+          </div>
+          <a href="tel:18001801551" className="text-xs font-extrabold text-primary bg-surface-container-lowest px-3 py-1.5 rounded-xl shadow-sm">
+            1800-180-1551
+          </a>
+        </div>
+      </div>
+
     </main>
   );
 }

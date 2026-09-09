@@ -1,0 +1,15 @@
+export const ROUTES = {
+  HOME: '/',
+  FARMER_LOGIN: '/farmer-login',
+  VERIFY: '/verify',
+  DASHBOARD: '/dashboard',
+  MANDI_SELECTION: '/mandi-selection',
+  BOOK_SLOT: '/book-slot',
+  LIVE_TOKEN: '/live-token',
+  STAFF_LOGIN: '/staff-login',
+  GUARD_TERMINAL: '/guard-terminal',
+  SUPERVISOR_EXCEPTIONS: '/supervisor-exceptions',
+  WEIGHMASTER_DESK: '/weighmaster-desk',
+  AUCTION_BOARD: '/auction-board',
+  PAYMENT_CHECKOUT: '/payment-checkout',
+};

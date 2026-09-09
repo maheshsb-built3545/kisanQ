@@ -1,8 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { requestFarmerOtp } from '../api/auth';
-import { ROUTES } from '../constants/routes';
-import { Banner } from '../components/Banner';
+import api from '../api';
 
 const LANGS = {
   hi: {
@@ -14,6 +12,8 @@ const LANGS = {
     btnSend: 'ओटीपी पाएं / Get OTP',
     sending: 'कॉलिंग / Requesting...',
     helpline: 'किसान सहायता केंद्र (24x7 Helpline)',
+    voiceMain: 'आवाज से सहायता लें',
+    voiceSub: 'सुनने के लिए माइक बटन दबाएं',
   },
   en: {
     title: 'Farmer Login / Kisan Gateway',
@@ -24,6 +24,8 @@ const LANGS = {
     btnSend: 'Get OTP / Request Code',
     sending: 'Requesting...',
     helpline: 'Kisan Support Centre (24x7 Helpline)',
+    voiceMain: 'Voice Assistance',
+    voiceSub: 'Tap listen button for help',
   },
   mr: {
     title: 'शेतकरी लॉगिन / Farmer Login',
@@ -34,6 +36,8 @@ const LANGS = {
     btnSend: 'ओटीपी मिळवा / Get OTP',
     sending: 'विनंती करत आहे...',
     helpline: 'किसान सहाय्यता केंद्र (24x7)',
+    voiceMain: 'ध्वनी सहाय्य मिळवा',
+    voiceSub: 'ऐकण्यासाठी प्ले बटन दाबा',
   },
 };
 
@@ -46,19 +50,16 @@ export default function Login() {
   const t = LANGS[lang];
 
   const handleSendOtp = async () => {
-    if (phone.length !== 10) {
-      setError('कृपया 10 अंकों का नंबर दर्ज करें।');
-      return;
-    }
+    if (phone.length !== 10) { setError('कृपया 10 अंकों का नंबर दर्ज करें।'); return; }
     setError('');
     setLoading(true);
     try {
-      const { data } = await requestFarmerOtp(phone);
+      const { data } = await api.post('/auth/farmer/request-otp', { phone });
       const devOtp = data?.data?.devOtp || '582490';
-      navigate(ROUTES.VERIFY, { state: { phone, lang, devOtp } });
+      navigate('/otp-verify', { state: { phone, lang, devOtp } });
     } catch (err) {
-      console.warn('[Login Notice] API call fallback:', err?.response?.data?.message || err?.message);
-      navigate(ROUTES.VERIFY, { state: { phone, lang, devOtp: '582490' } });
+      console.warn('Backend OTP request notice (demo mode fallback active):', err?.response?.data?.message || err?.message);
+      navigate('/otp-verify', { state: { phone, lang, devOtp: '582490' } });
     } finally {
       setLoading(false);
     }
@@ -104,13 +105,38 @@ export default function Login() {
         {/* Main Card */}
         <div className="bg-surface-container-lowest rounded-xl shadow-md p-4 flex flex-col gap-4">
 
+          {/* Voice Guidance */}
+          <div className="flex items-center justify-between bg-surface-container-low px-3 py-2 rounded-xl">
+            <div className="flex items-center gap-3">
+              <div className="w-7 h-7 rounded-full bg-secondary-fixed text-on-secondary-fixed flex items-center justify-center">
+                <span className="material-symbols-outlined text-base animate-pulse">volume_up</span>
+              </div>
+              <div>
+                <span className="block text-sm font-bold text-on-surface">{t.voiceMain}</span>
+                <span className="block text-xs text-on-surface-variant">{t.voiceSub}</span>
+              </div>
+            </div>
+            <button className="h-10 px-3 bg-surface-container-highest text-on-surface rounded-lg text-sm font-bold flex items-center gap-1 shadow-sm">
+              <span className="material-symbols-outlined text-lg text-secondary">play_circle</span>
+              <span>सुनें</span>
+            </button>
+          </div>
+
           {/* Phone input */}
           <div>
             <label className="block text-lg font-extrabold text-on-surface mb-1">{t.phoneHeader}</label>
             <p className="text-sm text-on-surface-variant mb-3">{t.phoneDesc}</p>
 
             <div className="relative flex items-stretch rounded-xl shadow-sm bg-surface-container-lowest focus-within:ring-2 focus-within:ring-primary-container">
+              {/* India flag + +91 */}
               <div className="flex items-center gap-1.5 px-3 bg-surface-container-high rounded-l-xl text-on-surface">
+                <div className="w-5 h-3.5 rounded-sm overflow-hidden flex flex-col shadow-inner">
+                  <span className="h-1/3 bg-[#FF9933] w-full block" />
+                  <span className="h-1/3 bg-white w-full flex items-center justify-center">
+                    <span className="w-1 h-1 rounded-full bg-[#000080] block" />
+                  </span>
+                  <span className="h-1/3 bg-[#128807] w-full block" />
+                </div>
                 <span className="text-lg font-bold text-on-surface">+91</span>
               </div>
               <input
@@ -128,21 +154,21 @@ export default function Login() {
                 <span className="material-symbols-outlined text-sm text-secondary">lock</span>
                 {t.privacy}
               </span>
+              <span className="font-mono text-outline">POST /farmer/request-otp</span>
             </div>
           </div>
 
-          <Banner type="error" message={error} onClose={() => setError('')} />
+          {error && <p className="text-sm text-error bg-error-container px-3 py-2 rounded-lg">{error}</p>}
 
           <button
             className="btn-primary"
             onClick={handleSendOtp}
             disabled={loading}
           >
-            {loading ? (
-              <><span className="material-symbols-outlined animate-spin text-lg">progress_activity</span><span>{t.sending}</span></>
-            ) : (
-              <><span className="material-symbols-outlined text-lg">sms</span><span>{t.btnSend}</span></>
-            )}
+            {loading
+              ? <><span className="material-symbols-outlined animate-spin text-lg">progress_activity</span><span>{t.sending}</span></>
+              : <><span className="material-symbols-outlined text-lg">sms</span><span>{t.btnSend}</span></>
+            }
           </button>
         </div>
 
@@ -155,9 +181,12 @@ export default function Login() {
             </span>
             <span className="px-2 py-0.5 rounded bg-surface-container-high text-on-surface text-xs font-extrabold">Toll-Free</span>
           </div>
-          <a href="tel:18001801551" className="w-full h-12 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-bold flex items-center justify-center gap-2 shadow-sm">
+          <a href="tel:18001801551"
+            className="w-full h-12 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-bold flex items-center justify-center gap-2 shadow-sm"
+          >
             <span className="material-symbols-outlined text-primary text-lg">call</span>
             <span className="text-primary font-black tracking-wider">1800-180-1551</span>
+            <span className="text-on-surface-variant text-xs">(किसान कॉल सेंटर)</span>
           </a>
         </div>
 
