@@ -5,43 +5,40 @@ import OTPVerify           from './pages/OTPVerify';
 import MandiSelection      from './pages/MandiSelection';
 import BookSlot            from './pages/BookSlot';
 import LiveToken           from './pages/LiveToken';
-import GuardTerminal       from './pages/GuardTerminal';
-import AuctionBoard        from './pages/AuctionBoard';
-import PaymentCheckout     from './pages/PaymentCheckout';
 import StaffLogin          from './pages/StaffLogin';
+import GuardTerminal       from './pages/GuardTerminal';
 import SupervisorExceptions from './pages/SupervisorExceptions';
+import WeighmasterDesk     from './pages/WeighmasterDesk';
+import AuctionBoard        from './pages/AuctionBoard';
 import Dashboard           from './pages/Dashboard';
+import NotFound            from './pages/NotFound';
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* ── App Gateway ── */}
-        <Route path="/"              element={<Landing />} />
+        {/* Main Gateway */}
+        <Route path="/" element={<Landing />} />
 
-        {/* ── Farmer Auth Flow ── */}
-        <Route path="/farmer-login"  element={<Login />} />
-        <Route path="/login"         element={<Login />} />
-        <Route path="/otp-verify"    element={<OTPVerify />} />
-        <Route path="/verify"        element={<OTPVerify />} />
-
-        {/* ── Farmer Booking & Token Flow ── */}
-        <Route path="/mandi-selection"  element={<MandiSelection />} />
-        <Route path="/book-slot"        element={<BookSlot />} />
-        <Route path="/live-token"       element={<LiveToken />} />
-
-        {/* ── Staff / Mandi Operations ── */}
-        <Route path="/staff-login"           element={<StaffLogin />} />
-        <Route path="/guard-terminal"        element={<GuardTerminal />} />
-        <Route path="/auction-board"         element={<AuctionBoard />} />
-        <Route path="/payment-checkout"      element={<PaymentCheckout />} />
-        <Route path="/supervisor-exceptions" element={<SupervisorExceptions />} />
-
-        {/* ── Farmer Dashboard ── */}
+        {/* Farmer Flow */}
+        <Route path="/farmer-login" element={<Login />} />
+        <Route path="/login" element={<Navigate to="/farmer-login" replace />} />
+        <Route path="/verify" element={<OTPVerify />} />
+        <Route path="/otp-verify" element={<Navigate to="/verify" replace />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/mandi-selection" element={<MandiSelection />} />
+        <Route path="/book-slot" element={<BookSlot />} />
+        <Route path="/live-token" element={<LiveToken />} />
 
-        {/* ── Fallback ── */}
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {/* Staff Flow */}
+        <Route path="/staff-login" element={<StaffLogin />} />
+        <Route path="/guard-terminal" element={<GuardTerminal />} />
+        <Route path="/supervisor-exceptions" element={<SupervisorExceptions />} />
+        <Route path="/weighmaster-desk" element={<WeighmasterDesk />} />
+        <Route path="/auction-board" element={<AuctionBoard />} />
+
+        {/* 404 Fallback */}
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>
   );

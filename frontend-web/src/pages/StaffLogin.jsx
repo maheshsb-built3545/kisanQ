@@ -4,7 +4,7 @@ import api from '../api';
 
 const STAFF_ROLES = [
   { id: 'gate_guard',    emoji: '🛡️', label: 'Gate Guard / द्वारपाल',         sub: 'Gate check-in & Queue management',    route: '/guard-terminal' },
-  { id: 'weighmaster',  emoji: '⚖️', label: 'Weighmaster / तौलिया',           sub: 'Weighbridge & Grade verification',    route: '/guard-terminal' },
+  { id: 'weighmaster',  emoji: '⚖️', label: 'Weighmaster / तौलिया',           sub: 'Weighbridge & Grade verification',    route: '/weighmaster-desk' },
   { id: 'auctioneer',   emoji: '🔨', label: 'Auctioneer / नीलामकर्ता',        sub: 'Live auction & Hammer operations',    route: '/auction-board' },
   { id: 'supervisor',   emoji: '👨‍💼', label: 'Supervisor / पर्यवेक्षक',        sub: 'Full access – Exceptions & Overrides', route: '/supervisor-exceptions' },
   { id: 'district_admin', emoji: '🏛️', label: 'District Admin / जिला अधिकारी', sub: 'Multi-mandi oversight & Reports',    route: '/dashboard' },
