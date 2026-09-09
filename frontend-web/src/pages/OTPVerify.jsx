@@ -6,16 +6,27 @@ export default function OTPVerify() {
   const navigate = useNavigate();
   const { state } = useLocation();
   const phone = state?.phone || '';
-  const [otp, setOtp] = useState(['', '', '', '', '', '']);
+  const mockOtp = state?.mockOtp || '';
+  // Pre-split mockOtp into 6 digit slots; pads with empty string if shorter
+  const initialDigits = Array.from({ length: 6 }, (_, i) => mockOtp[i] || '');
+  const [otp, setOtp] = useState(initialDigits);
   const [timer, setTimer] = useState(48);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const inputRefs = useRef([]);
 
+  // Start countdown timer
   useEffect(() => {
     const id = setInterval(() => setTimer((t) => (t > 0 ? t - 1 : 0)), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Auto-focus the last filled digit when mockOtp is pre-loaded
+  useEffect(() => {
+    if (mockOtp && inputRefs.current[5]) {
+      inputRefs.current[5].focus();
+    }
+  }, [mockOtp]);
 
   const handleChange = (idx, val) => {
     if (!/^\d?$/.test(val)) return;
@@ -45,7 +56,8 @@ export default function OTPVerify() {
       if (data?.data?.token) localStorage.setItem('kq_token', data.data.token);
       navigate('/mandi-selection');
     } catch {
-      // Dev: skip auth
+      // Dev mock: save a dummy JWT so api.js interceptor treats user as authenticated
+      localStorage.setItem('kq_token', 'mock_token');
       navigate('/mandi-selection');
     } finally { setLoading(false); }
   };

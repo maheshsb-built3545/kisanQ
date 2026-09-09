@@ -36,6 +36,12 @@ export default function MandiSelection() {
   const [mandis, setMandis] = useState(SEED_MANDIS);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [audioToast, setAudioToast] = useState(false);
+
+  const showAudioGuide = () => {
+    setAudioToast(true);
+    setTimeout(() => setAudioToast(false), 3000);
+  };
 
   useEffect(() => {
     api.get('/centres').then(({ data }) => {
@@ -67,11 +73,19 @@ export default function MandiSelection() {
               <span className="material-symbols-outlined text-sm mr-1">translate</span>
               हिन्दी
             </div>
-            <button className="w-11 h-11 bg-primary-fixed text-on-primary-fixed rounded-xl flex items-center justify-center" onClick={() => alert('ऑडियो गाइड: लासलगांव मंडी में अभी सबसे कम प्रतीक्षा समय है।')}>
+            <button className="w-11 h-11 bg-primary-fixed text-on-primary-fixed rounded-xl flex items-center justify-center" onClick={showAudioGuide}>
               <span className="material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>volume_up</span>
             </button>
           </div>
         </div>
+
+        {/* Audio guide toast */}
+        {audioToast && (
+          <div className="flex items-center gap-3 bg-secondary-fixed text-on-secondary-fixed px-4 py-3 rounded-xl shadow-md animate-bounce">
+            <span className="material-symbols-outlined text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>volume_up</span>
+            <span className="text-sm font-bold">ऑडियो गाइड: लासलगांव मंडी में अभी सबसे कम प्रतीक्षा समय है।</span>
+          </div>
+        )}
 
         {/* Location bar */}
         <div className="flex items-center justify-between bg-surface-container-low px-4 py-3 rounded-xl">

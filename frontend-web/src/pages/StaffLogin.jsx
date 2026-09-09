@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import api from '../api';
 
 const STAFF_ROLES = [
-  { id: 'supervisor', emoji: '👨‍💼', label: 'Supervisor / पर्यवेक्षक', sub: 'Full access – Exceptions & Overrides' },
-  { id: 'weighmaster', emoji: '⚖️', label: 'Weighmaster / तौलिया', sub: 'Weighbridge & Grade verification' },
-  { id: 'gate_guard', emoji: '🛡️', label: 'Gate Guard / द्वारपाल', sub: 'Gate check-in & Queue management' },
-  { id: 'auctioneer', emoji: '🔨', label: 'Auctioneer / नीलामकर्ता', sub: 'Live auction & Hammer operations' },
+  { id: 'gate_guard',    emoji: '🛡️', label: 'Gate Guard / द्वारपाल',         sub: 'Gate check-in & Queue management',    route: '/guard-terminal' },
+  { id: 'weighmaster',  emoji: '⚖️', label: 'Weighmaster / तौलिया',           sub: 'Weighbridge & Grade verification',    route: '/guard-terminal' },
+  { id: 'auctioneer',   emoji: '🔨', label: 'Auctioneer / नीलामकर्ता',        sub: 'Live auction & Hammer operations',    route: '/auction-board' },
+  { id: 'supervisor',   emoji: '👨‍💼', label: 'Supervisor / पर्यवेक्षक',        sub: 'Full access – Exceptions & Overrides', route: '/supervisor-exceptions' },
+  { id: 'district_admin', emoji: '🏛️', label: 'District Admin / जिला अधिकारी', sub: 'Multi-mandi oversight & Reports',    route: '/dashboard' },
 ];
 
 export default function StaffLogin() {
@@ -21,15 +22,34 @@ export default function StaffLogin() {
   const handleLogin = async () => {
     if (!employeeId || !password) { setError('कृपया सभी फ़ील्ड भरें।'); return; }
     setError(''); setLoading(true);
+    const ROLE_PAYLOAD_MAP = {
+      gate_guard: 'operator',
+      weighmaster: 'staff',
+      auctioneer: 'operator',
+      supervisor: 'supervisor',
+      district_admin: 'district_admin',
+    };
     try {
-      const { data } = await api.post('/auth/staff/login', { employeeId, password, role });
-      if (data?.data?.token) localStorage.setItem('kq_token', data.data.token);
-      const dest = role === 'gate_guard' ? '/guard-terminal' : role === 'auctioneer' ? '/auction-board' : '/guard-terminal';
-      navigate(dest);
-    } catch {
-      const dest = role === 'gate_guard' ? '/guard-terminal' : role === 'auctioneer' ? '/auction-board' : '/guard-terminal';
-      navigate(dest);
-    } finally { setLoading(false); }
+      const backendRole = ROLE_PAYLOAD_MAP[role] || 'supervisor';
+      const { data } = await api.post('/auth/staff/login', {
+        name: employeeId,
+        password,
+        role: backendRole,
+      });
+      if (data?.data?.token) {
+        localStorage.setItem('kq_token', data.data.token);
+        if (data?.data?.user) {
+          localStorage.setItem('kq_user', JSON.stringify(data.data.user));
+        }
+      }
+    } catch (err) {
+      console.warn('Backend staff login notice (demo fallback active):', err?.response?.data?.message || err?.message);
+      localStorage.setItem('kq_token', 'mock_staff_token');
+    }
+    // Route based on selected role
+    const dest = STAFF_ROLES.find((r) => r.id === role)?.route || '/guard-terminal';
+    navigate(dest);
+    setLoading(false);
   };
 
   return (
@@ -136,7 +156,7 @@ export default function StaffLogin() {
 
         {/* Farmer link */}
         <div className="text-center">
-          <p className="text-sm text-on-surface-variant">किसान हैं? <button onClick={() => navigate('/')} className="text-primary font-bold">किसान पोर्टल पर जाएं →</button></p>
+          <p className="text-sm text-on-surface-variant">किसान हैं? <button onClick={() => navigate('/farmer-login')} className="text-primary font-bold">किसान पोर्टल पर जाएं →</button></p>
         </div>
 
       </div>

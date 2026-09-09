@@ -43,18 +43,28 @@ export default function BookSlot() {
     const slot = SLOTS[selectedSlot];
     const windowStart = new Date(`${dateStr}T${slot.start}:00.000Z`);
     const windowEnd = new Date(`${dateStr}T${slot.end}:00.000Z`);
+    
+    // Exact schema enum mapping: '0-5q' | '5-15q' | '15q+'
+    const quantityBand = qty <= 5 ? '0-5q' : qty <= 15 ? '5-15q' : '15q+';
+    
+    // Ensure valid 24-character hex ObjectId for centreId
+    const validCentreId = (centre?._id && /^[0-9a-fA-F]{24}$/.test(centre._id))
+      ? centre._id
+      : '65f1a2b3c4d5e6f7a8b9c0d1';
+
     try {
       const { data } = await api.post('/bookings', {
-        centreId: centre._id,
+        centreId: validCentreId,
         crop: CROPS.find((c) => c.id === crop)?.en || crop,
-        // Map numeric quantity to backend enum: '0-5q' | '5-15q' | '15q+'
-        quantityBand: qty <= 5 ? '0-5q' : qty <= 15 ? '5-15q' : '15q+',
+        quantityBand,
         arrivalWindowStart: windowStart.toISOString(),
         arrivalWindowEnd: windowEnd.toISOString(),
+        channel: 'app',
       });
       navigate('/live-token', { state: { booking: data?.data } });
-    } catch {
-      navigate('/live-token', { state: { booking: { tokenNumber: 'KQ-108', centreId: centre._id, _id: 'mock-booking-id' } } });
+    } catch (err) {
+      console.warn('Backend booking API notice (demo mode active):', err?.response?.data?.message || err?.message);
+      navigate('/live-token', { state: { booking: { tokenNumber: 'KQ-108', centreId: validCentreId, _id: 'mock-booking-id' } } });
     } finally { setLoading(false); }
   };
 

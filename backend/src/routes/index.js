@@ -7,6 +7,7 @@ const queueRoutes = require('./queueRoutes');
 const centreRoutes = require('./centreRoutes');
 const procurementRoutes = require('./procurementRoutes');
 const exceptionRoutes = require('./exceptionRoutes');
+const notificationRoutes = require('./notificationRoutes');
 
 // Mount modular service routes
 router.use('/auth', authRoutes);
@@ -15,5 +16,6 @@ router.use('/queue', queueRoutes);
 router.use('/centres', centreRoutes);
 router.use('/procurement', procurementRoutes);
 router.use('/exceptions', exceptionRoutes);
+router.use('/notifications', notificationRoutes);
 
 module.exports = router;

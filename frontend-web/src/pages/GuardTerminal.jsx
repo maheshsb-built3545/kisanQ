@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import api from '../api';
@@ -22,8 +22,16 @@ const STATUS_CFG = {
 
 export default function GuardTerminal() {
   const navigate = useNavigate();
-  const [queue, setQueue] = useState(MOCK_QUEUE);
+  const [queue, setQueue]               = useState(MOCK_QUEUE);
   const [activeFilter, setActiveFilter] = useState('all');
+  // QR scanner state
+  const [scanInput, setScanInput]       = useState('');
+  const [scannedEntry, setScannedEntry] = useState(null);
+  const [scanError, setScanError]       = useState('');
+  // Big CTA state
+  const [entryLoading, setEntryLoading] = useState(false);
+  const [entrySuccess, setEntrySuccess] = useState(false);
+  const scanRef = useRef(null);
 
   useEffect(() => {
     api.get('/queue').then(({ data }) => {
@@ -38,13 +46,87 @@ export default function GuardTerminal() {
   const visible = activeFilter === 'all' ? queue : queue.filter((q) => q.status === activeFilter);
 
   const handleCheckin = async (token) => {
-    try {
-      await api.patch(`/queue/${token}/checkin`);
-      setQueue((q) => q.map((e) => e.token === token ? { ...e, status: 'arrived' } : e));
-    } catch {
-      setQueue((q) => q.map((e) => e.token === token ? { ...e, status: 'arrived' } : e));
-    }
+    try { await api.patch(`/queue/${token}/checkin`); } catch { /* optimistic */ }
+    setQueue((q) => q.map((e) => e.token === token ? { ...e, status: 'arrived' } : e));
+    if (scannedEntry?.token === token) setScannedEntry((p) => p ? { ...p, status: 'arrived' } : p);
   };
+
+  // ── QR / manual token lookup ──────────────────────────────────────────────
+  const handleScan = () => {
+    const id = scanInput.trim().toUpperCase();
+    if (!id) return;
+    const norm = id.startsWith('KQ-') ? id : id.startsWith('KQ') ? `KQ-${id.slice(2)}` : `KQ-${id}`;
+    const found = queue.find((e) => e.token === norm);
+    if (found) { setScannedEntry(found); setScanError(''); }
+    else { setScannedEntry(null); setScanError(`टोकन "${norm}" कतार में नहीं मिला।`); }
+  };
+
+  // ── Big "ALLOW ENTRY" CTA ─────────────────────────────────────────────────
+  const handleAllowEntry = async () => {
+    if (!scannedEntry) return;
+    setEntryLoading(true);
+    try { await api.post(`/queue/${scannedEntry.token}/check-in`); } catch { /* optimistic */ }
+    setQueue((q) => q.map((e) => e.token === scannedEntry.token ? { ...e, status: 'arrived' } : e));
+    setEntryLoading(false);
+    setEntrySuccess(true);
+  };
+
+  const resetScan = () => {
+    setScanInput(''); setScannedEntry(null);
+    setScanError(''); setEntrySuccess(false);
+    setTimeout(() => scanRef.current?.focus(), 50);
+  };
+
+  // ── Full-screen success screen ──────────────────────────────────────────
+  if (entrySuccess && scannedEntry) {
+    return (
+      <main className="flex flex-col min-h-screen bg-surface items-center justify-center px-4 font-jakarta">
+        <div className="w-full max-w-md flex flex-col items-center gap-6 text-center">
+          <div className="w-28 h-28 rounded-full bg-secondary-fixed flex items-center justify-center shadow-xl">
+            <span className="material-symbols-outlined text-6xl text-on-secondary-fixed" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+          </div>
+          <div>
+            <p className="text-xs font-extrabold text-secondary uppercase tracking-widest mb-1">प्रवेश पूर्ण / Entry Complete</p>
+            <h1 className="text-3xl font-black text-primary">Gate Open!</h1>
+            <p className="text-sm text-on-surface-variant mt-1">Farmer has been granted entry.</p>
+          </div>
+          <div className="bg-surface-container-lowest rounded-2xl p-5 w-full shadow-md text-left space-y-2.5">
+            <div className="flex items-center gap-3 pb-3 border-b border-outline-variant/30">
+              <div className="w-14 h-14 rounded-xl bg-primary text-on-primary flex items-center justify-center text-2xl font-black shadow-sm">
+                {scannedEntry.token.split('-')[1]}
+              </div>
+              <div>
+                <p className="text-lg font-bold text-on-surface">{scannedEntry.token}</p>
+                <p className="text-sm text-on-surface-variant">{scannedEntry.farmer}</p>
+              </div>
+            </div>
+            {[['उपज', scannedEntry.crop], ['मात्रा', scannedEntry.qty], ['वाहन', scannedEntry.vehicle], ['गेट', 'Gate No. 2 → Lane B → W3']].map(([k, v]) => (
+              <div key={k} className="flex justify-between">
+                <span className="text-sm text-on-surface-variant">{k}</span>
+                <span className="text-sm font-bold text-on-surface">{v}</span>
+              </div>
+            ))}
+            <div className="mt-1 bg-secondary-fixed/20 rounded-xl px-3 py-2 flex items-center gap-2">
+              <span className="material-symbols-outlined text-secondary text-base">schedule</span>
+              <span className="text-sm font-bold text-secondary">
+                {new Date().toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' })} — Entry logged
+              </span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 w-full">
+            <button onClick={resetScan} className="h-14 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 shadow-md active:scale-95 transition-transform">
+              <span className="material-symbols-outlined text-xl">qr_code_scanner</span>
+              अगला स्कैन
+            </button>
+            <button onClick={() => navigate(-1)} className="h-14 bg-surface-container-lowest text-on-surface rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm">
+              <span className="material-symbols-outlined text-xl">list</span>
+              वापस जाएं
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-4 font-jakarta">
@@ -93,10 +175,74 @@ export default function GuardTerminal() {
             </div>
           </div>
           <div className="flex gap-2 mt-3">
-            <input className="flex-1 h-12 px-3 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-bold tracking-wider focus:outline-none" placeholder="Token ID: KQ-108" />
-            <button className="h-12 px-4 bg-primary text-on-primary rounded-xl text-sm font-bold shadow-sm">Verify</button>
+            <input
+              ref={scanRef}
+              id="guard-scan-input"
+              className="flex-1 h-12 px-3 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-bold tracking-wider focus:outline-none focus:ring-2 focus:ring-primary"
+              placeholder='Token ID: KQ-108 या सिर्फ "108"'
+              value={scanInput}
+              onChange={(e) => setScanInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleScan()}
+            />
+            <button
+              id="guard-verify-btn"
+              onClick={handleScan}
+              className="h-12 px-4 bg-primary text-on-primary rounded-xl text-sm font-bold shadow-sm active:scale-95 transition-transform"
+            >Verify</button>
           </div>
+          {scanError && <p className="mt-2 text-sm text-error bg-error-container/80 px-3 py-1.5 rounded-lg">{scanError}</p>}
         </div>
+
+        {/* Scanned token panel + BIG CTA */}
+        {scannedEntry && (
+          <div className="bg-surface-container-lowest rounded-2xl shadow-xl overflow-hidden ring-2 ring-primary">
+            <div className="bg-gradient-to-r from-primary to-primary-container px-5 py-3 flex items-center justify-between">
+              <div>
+                <span className="text-on-primary/70 text-xs font-extrabold uppercase tracking-wider block">स्कैन किया गया टोकन</span>
+                <span className="text-on-primary text-xl font-bold">{scannedEntry.token}</span>
+              </div>
+              <span className={`px-3 py-1.5 rounded-xl text-xs font-extrabold ${STATUS_CFG[scannedEntry.status]?.badge}`}>
+                {STATUS_CFG[scannedEntry.status]?.lbl}
+              </span>
+            </div>
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                {[['किसान', scannedEntry.farmer], ['उपज', scannedEntry.crop], ['मात्रा', scannedEntry.qty], ['वाहन', scannedEntry.vehicle]].map(([k, v]) => (
+                  <div key={k} className="bg-surface-container-low rounded-xl p-2.5">
+                    <span className="block text-xs text-on-surface-variant">{k}</span>
+                    <span className="block text-sm font-bold text-on-surface leading-snug">{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-secondary-fixed/20 rounded-xl p-3 flex items-center gap-2">
+                <span className="material-symbols-outlined text-secondary text-xl">fork_right</span>
+                <div>
+                  <span className="block text-xs text-on-surface-variant">निर्देशित मार्ग</span>
+                  <span className="block text-sm font-bold text-on-surface">Gate No. 2 → Lane B → Weighbridge W3</span>
+                </div>
+              </div>
+              {scannedEntry.status === 'arrived' ? (
+                <div className="w-full h-16 bg-secondary-fixed text-on-secondary-fixed rounded-xl flex items-center justify-center gap-3 text-base font-bold">
+                  <span className="material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+                  प्रवेश पूर्ण / Entry Already Done
+                </div>
+              ) : (
+                <button
+                  id="guard-allow-entry-btn"
+                  onClick={handleAllowEntry}
+                  disabled={entryLoading}
+                  className="w-full h-16 bg-primary text-on-primary rounded-xl flex items-center justify-center gap-3 text-base font-bold shadow-xl active:scale-95 transition-all disabled:opacity-70"
+                >
+                  {entryLoading
+                    ? <><span className="material-symbols-outlined text-2xl animate-spin">autorenew</span><span>प्रवेश दर्ज हो रहा है...</span></>
+                    : <><span className="material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>door_open</span><span>ALLOW ENTRY &amp; PRINT SLIP</span></>
+                  }
+                </button>
+              )}
+              <button onClick={resetScan} className="w-full h-10 bg-surface-container text-on-surface-variant rounded-xl text-sm font-bold">रद्द करें / Clear Scan</button>
+            </div>
+          </div>
+        )}
 
         {/* Filter */}
         <div className="flex gap-2 overflow-x-auto pb-1">
@@ -168,6 +314,12 @@ export default function GuardTerminal() {
                   <div className="mt-3 bg-secondary-fixed text-on-secondary-fixed px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-bold">
                     <span className="material-symbols-outlined text-lg">campaign</span>
                     अनाउंसमेंट जारी / Announcement Active
+                  </div>
+                )}
+                {entry.status === 'arrived' && (
+                  <div className="mt-3 bg-primary-fixed text-on-primary-fixed px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-bold">
+                    <span className="material-symbols-outlined text-lg" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+                    प्रवेश पूर्ण / Entry Complete
                   </div>
                 )}
               </div>

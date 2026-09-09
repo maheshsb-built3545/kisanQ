@@ -24,12 +24,17 @@ export default function AuctionBoard() {
   const [bidInput, setBidInput] = useState('');
   const [bids, setBids] = useState(BIDDERS);
   const [hammer, setHammer] = useState(false);
+  const [bidError, setBidError] = useState('');
 
   const highestBid = Math.max(...bids.filter(b => b.grade === grade).map(b => b.bid), 0);
 
   const handleBid = () => {
     const amt = Number(bidInput);
-    if (!amt || amt <= highestBid) { alert('बोली वर्तमान उच्चतम बोली से अधिक होनी चाहिए।'); return; }
+    if (!amt || amt <= highestBid) {
+      setBidError('बोली वर्तमान उच्चतम बोली से अधिक होनी चाहिए।');
+      return;
+    }
+    setBidError('');
     setBids(prev => [{ id: `TR-${Date.now()}`, name: 'नई बोली', grade, bid: amt, time: 'अभी' }, ...prev]);
     setBidInput('');
   };
@@ -154,6 +159,9 @@ export default function AuctionBoard() {
               <button key={n} onClick={() => setBidInput(String(highestBid + n))} className="flex-1 h-11 rounded-lg bg-surface-container text-on-surface text-sm font-bold">+₹{n}</button>
             ))}
           </div>
+          {bidError && (
+            <p className="text-sm text-error bg-error-container px-3 py-2 rounded-lg mt-2">{bidError}</p>
+          )}
         </div>
 
         {/* Hammer CTA */}

@@ -100,6 +100,32 @@ export default function LiveToken() {
   const fmt = (s) =>
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
+  // ── Action handlers ────────────────────────────────────────────────────────────────────────
+  const shareToken = async () => {
+    const text = `📍 KisanQ गेट पास
+तोकन: ${tokenData.token}
+उपज: ${tokenData.crop}
+मात्रा: ${tokenData.qty}
+लान: ${tokenData.lane}
+जानकारी: http://localhost:5173/live-token`;
+    if (navigator.share) {
+      try { await navigator.share({ title: `KisanQ Token ${tokenData.token}`, text }); } catch { /* user cancelled */ }
+    } else {
+      await navigator.clipboard.writeText(text);
+      // Show brief feedback via title flash
+      document.title = '✅ Token Copied!';
+      setTimeout(() => { document.title = 'KisanQ – किसान डिजिटल मंडी पोर्टल'; }, 2000);
+    }
+  };
+
+  const printToken = () => window.print();
+
+  const cancelToken = () => {
+    if (window.confirm('क्या आप वाकई यह निवेदन रद्द करना चाहते हैं?')) {
+      navigate('/mandi-selection');
+    }
+  };
+
   const STATUS_LABEL = {
     queued:    { label: 'कतार में • In Queue',     cls: 'bg-tertiary-fixed text-on-tertiary-fixed' },
     called:    { label: 'आपकी बारी • Your Turn!',  cls: 'bg-secondary-fixed text-on-secondary-fixed animate-bounce' },
@@ -254,15 +280,15 @@ export default function LiveToken() {
             <span className="material-symbols-outlined text-xl text-primary">store</span>
             <span className="text-xs font-bold">दूसरी मंडी</span>
           </button>
-          <button className="h-14 bg-secondary-fixed rounded-xl flex flex-col items-center justify-center gap-1 text-on-secondary-fixed">
+          <button onClick={shareToken} className="h-14 bg-secondary-fixed rounded-xl flex flex-col items-center justify-center gap-1 text-on-secondary-fixed">
             <span className="material-symbols-outlined text-xl">share</span>
             <span className="text-xs font-bold">टोकन शेयर करें</span>
           </button>
-          <button className="h-14 bg-tertiary-fixed rounded-xl flex flex-col items-center justify-center gap-1 text-on-tertiary-fixed">
+          <button onClick={printToken} className="h-14 bg-tertiary-fixed rounded-xl flex flex-col items-center justify-center gap-1 text-on-tertiary-fixed">
             <span className="material-symbols-outlined text-xl">print</span>
             <span className="text-xs font-bold">प्रिंट / PDF</span>
           </button>
-          <button className="h-14 bg-surface-container-lowest rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 text-on-surface">
+          <button onClick={cancelToken} className="h-14 bg-surface-container-lowest rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 text-on-surface">
             <span className="material-symbols-outlined text-xl text-error">cancel</span>
             <span className="text-xs font-bold">रद्द करें</span>
           </button>
@@ -293,7 +319,7 @@ export default function LiveToken() {
           ['storefront', 'मंडी', '/mandi-selection', false],
           ['confirmation_number', 'मेरा टोकन', '/live-token', true],
           ['traffic', 'कतार', '/live-token', false],
-          ['help_outline', 'सहायता', '/', false],
+          ['help_outline', 'सहायता', '/farmer-login', false],
         ].map(([icon, label, path, active]) => (
           <button key={label} onClick={() => navigate(path)} className={`flex flex-col items-center flex-1 py-1 ${active ? 'text-primary' : 'text-on-surface-variant'}`}>
             <div className={active ? 'bg-primary-fixed px-3 py-1 rounded-full mb-0.5' : 'py-1 mb-0.5'}>
