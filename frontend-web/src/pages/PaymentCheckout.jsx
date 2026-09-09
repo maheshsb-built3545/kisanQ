@@ -31,12 +31,20 @@ export default function PaymentCheckout() {
   if (paid) return (
     <main className="flex flex-col min-h-screen bg-surface items-center justify-center px-4 font-jakarta">
       <div className="w-full max-w-md flex flex-col items-center gap-6 text-center">
-        <div className="w-24 h-24 rounded-full bg-secondary-fixed flex items-center justify-center shadow-xl">
-          <span className="material-symbols-outlined text-5xl text-on-secondary-fixed" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
-        </div>
-        <div>
-          <h1 className="text-2xl font-black text-primary">भुगतान सफल!</h1>
-          <p className="text-sm text-on-surface-variant mt-1">Payment Successful</p>
+        {/* Header */}
+        <header className="bg-surface-container-lowest rounded-xl p-4 shadow-sm">
+          <span className="text-xs font-extrabold text-secondary uppercase tracking-wider block mb-1">
+            <span className="material-symbols-outlined text-base align-middle">receipt_long</span>
+            Direct Mandi Payout Settlement
+          </span>
+          <h1 className="text-xl font-bold text-on-surface">भुगतान एवं भुगतान रसीद</h1>
+          <p className="text-sm text-on-surface-variant">Farmer Direct Payout &amp; Mandi Slip</p>
+        </header>
+
+        {/* Backend In Development Banner */}
+        <div className="p-3 bg-tertiary-fixed text-on-tertiary-fixed rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm">
+          <span className="material-symbols-outlined text-base shrink-0">engineering</span>
+          <span>[Backend Notice] Direct payment gateway integration is in development. Displaying settlement slip preview.</span>
         </div>
         <div className="bg-surface-container-lowest rounded-2xl p-6 w-full shadow-md text-left space-y-2">
           <div className="flex justify-between"><span className="text-sm text-on-surface-variant">किसान</span><span className="text-sm font-bold">{lot.farmer}</span></div>

@@ -49,23 +49,28 @@ export default function AuctionBoard() {
       <div className="flex flex-col w-full max-w-md mx-auto gap-4">
 
         {/* Header */}
-        <header className="bg-primary rounded-xl p-4 shadow-md flex items-start justify-between">
-          <div>
-            <span className="text-on-primary/70 text-xs font-extrabold uppercase tracking-wider block mb-1">
-              <span className="material-symbols-outlined text-base align-middle">gavel</span>
-              नीलामी बोर्ड / Live Auction
-            </span>
-            <h1 className="text-xl font-bold text-on-primary">{activeLot.crop}</h1>
-            <p className="text-sm text-on-primary/80">{activeLot.farmer} • Token {activeLot.token}</p>
-          </div>
-          <div className="flex flex-col items-end gap-1">
-            <div className="flex items-center gap-1.5 bg-secondary-fixed text-on-secondary-fixed px-2 py-1 rounded-full text-xs font-extrabold">
+        <header className="bg-surface-container-lowest rounded-xl p-4 shadow-sm">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="flex items-center gap-1.5 text-xs font-extrabold text-secondary uppercase tracking-wider mb-1">
+                <span className="material-symbols-outlined text-base">gavel</span>
+                Live APMC Auction Board
+              </div>
+              <h1 className="text-xl font-bold text-on-surface">लासलगांव मंडी – नीलामी कक्ष</h1>
+              <p className="text-sm text-on-surface-variant">Grade-Wise Electronic Bidding Portal</p>
+            </div>
+            <span className="px-2 py-1 rounded-full bg-secondary-fixed text-on-secondary-fixed text-xs font-extrabold flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-secondary animate-ping" />
               LIVE
-            </div>
-            <span className="text-on-primary/70 text-xs">Weighbridge {activeLot.weighbridgeId}</span>
+            </span>
           </div>
         </header>
+
+        {/* Backend In Development Banner */}
+        <div className="p-3 bg-tertiary-fixed text-on-tertiary-fixed rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm">
+          <span className="material-symbols-outlined text-base shrink-0">engineering</span>
+          <span>[Backend Notice] Electronic bidding microservice is currently in development phase. Displaying interface preview.</span>
+        </div>
 
         {/* Weighbridge results */}
         <section className="bg-surface-container-lowest rounded-xl shadow-sm p-4">
