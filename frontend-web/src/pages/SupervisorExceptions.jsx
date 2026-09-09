@@ -88,7 +88,7 @@ export default function SupervisorExceptions() {
 
   return (
     <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-4 font-jakarta">
-      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+      <div className="flex flex-col w-full max-w-5xl mx-auto gap-4">
 
         {/* Header */}
         <header className="bg-primary rounded-xl p-4 shadow-md">
