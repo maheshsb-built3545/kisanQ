@@ -10,6 +10,7 @@ import GuardTerminal       from './pages/GuardTerminal';
 import SupervisorExceptions from './pages/SupervisorExceptions';
 import WeighmasterDesk     from './pages/WeighmasterDesk';
 import AuctionBoard        from './pages/AuctionBoard';
+import DistrictAdmin       from './pages/DistrictAdmin';
 import Dashboard           from './pages/Dashboard';
 import NotFound            from './pages/NotFound';
 
@@ -36,6 +37,8 @@ export default function App() {
         <Route path="/supervisor-exceptions" element={<SupervisorExceptions />} />
         <Route path="/weighmaster-desk" element={<WeighmasterDesk />} />
         <Route path="/auction-board" element={<AuctionBoard />} />
+        <Route path="/admin-dashboard" element={<DistrictAdmin />} />
+        <Route path="/district-admin" element={<Navigate to="/admin-dashboard" replace />} />
 
         {/* 404 Fallback */}
         <Route path="*" element={<NotFound />} />

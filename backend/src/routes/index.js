@@ -8,6 +8,7 @@ const centreRoutes = require('./centre.routes');
 const procurementRoutes = require('./procurementRoutes');
 const exceptionRoutes = require('./exception.routes');
 const notificationRoutes = require('./notification.routes');
+const adminRoutes = require('./admin.routes');
 
 // Mount modular service routes
 router.use('/auth', authRoutes);
@@ -17,5 +18,6 @@ router.use('/centres', centreRoutes);
 router.use('/procurement', procurementRoutes);
 router.use('/exceptions', exceptionRoutes);
 router.use('/notifications', notificationRoutes);
+router.use('/admin', adminRoutes);
 
 module.exports = router;
