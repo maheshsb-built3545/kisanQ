@@ -308,8 +308,19 @@ const queueService = {
       throw new Error(`Booking ${bookingId} not found`);
     }
 
-    if (booking.status !== 'BOOKED' && booking.status !== 'CONFIRMED') {
+    // Status guards: reject checked-in or any post-arrival state
+    if (['CHECKED_IN', 'INSPECTED', 'WEIGHED_READY_FOR_AUCTION', 'PROCUREMENT_APPROVED', 'COMPLETED'].includes(booking.status)) {
+      throw new Error('Cannot release a booking that has already checked in');
+    }
+
+    // Must be CONFIRMED
+    if (booking.status !== 'CONFIRMED') {
       throw new Error(`Cannot mark booking with status '${booking.status}' as eligible for release`);
+    }
+
+    // Grace period guard: gracePeriodEnd must have passed if defined
+    if (booking.gracePeriodEnd && new Date(booking.gracePeriodEnd) > new Date()) {
+      throw new Error('Cannot mark booking as eligible for release: grace period has not expired yet');
     }
 
     // Update status

@@ -1,0 +1,3184 @@
+﻿
+================================================================================
+FILE: src/main.jsx
+================================================================================
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.jsx'
+
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+
+
+================================================================================
+FILE: src/App.jsx
+================================================================================
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import Landing             from './pages/Landing';
+import Login               from './pages/Login';
+import OTPVerify           from './pages/OTPVerify';
+import MandiSelection      from './pages/MandiSelection';
+import BookSlot            from './pages/BookSlot';
+import LiveToken           from './pages/LiveToken';
+import StaffLogin          from './pages/StaffLogin';
+import GuardTerminal       from './pages/GuardTerminal';
+import SupervisorExceptions from './pages/SupervisorExceptions';
+import WeighmasterDesk     from './pages/WeighmasterDesk';
+import AuctionBoard        from './pages/AuctionBoard';
+import Dashboard           from './pages/Dashboard';
+import NotFound            from './pages/NotFound';
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* Main Gateway */}
+        <Route path="/" element={<Landing />} />
+
+        {/* Farmer Flow */}
+        <Route path="/farmer-login" element={<Login />} />
+        <Route path="/login" element={<Navigate to="/farmer-login" replace />} />
+        <Route path="/verify" element={<OTPVerify />} />
+        <Route path="/otp-verify" element={<Navigate to="/verify" replace />} />
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/mandi-selection" element={<MandiSelection />} />
+        <Route path="/book-slot" element={<BookSlot />} />
+        <Route path="/live-token" element={<LiveToken />} />
+
+        {/* Staff Flow */}
+        <Route path="/staff-login" element={<StaffLogin />} />
+        <Route path="/guard-terminal" element={<GuardTerminal />} />
+        <Route path="/supervisor-exceptions" element={<SupervisorExceptions />} />
+        <Route path="/weighmaster-desk" element={<WeighmasterDesk />} />
+        <Route path="/auction-board" element={<AuctionBoard />} />
+
+        {/* 404 Fallback */}
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+
+================================================================================
+FILE: src/api.js
+================================================================================
+// Centralised API client – points to the backend
+import axios from 'axios';
+
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+  headers: { 'Content-Type': 'application/json' },
+});
+
+// ── Request interceptor: attach JWT ────────────────────────────────────────
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('kq_token');
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// ── Response interceptor: handle 401 Unauthorized globally ─────────────────
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('kq_token');
+      localStorage.removeItem('kq_user');
+      const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
+      if (isDemoMode) {
+        console.warn('[KisanQ] 401 Unauthorized — VITE_DEMO_MODE active, skipping redirect.');
+      } else {
+        window.location.href = '/farmer-login';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+
+
+================================================================================
+FILE: src/index.css
+================================================================================
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    background-color: #faf8ff;
+    color: #131b2e;
+    -webkit-tap-highlight-color: transparent;
+  }
+  ::-webkit-scrollbar { display: none; }
+  body { overscroll-behavior: none; }
+}
+
+@layer components {
+  .material-symbols-outlined {
+    font-family: 'Material Symbols Outlined';
+    font-weight: normal;
+    font-style: normal;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .otp-box {
+    @apply h-14 w-full text-center text-3xl font-black rounded-xl bg-surface-container-low text-on-surface shadow-inner outline-none;
+  }
+  .otp-box:focus {
+    @apply bg-white ring-4 ring-secondary-fixed;
+  }
+
+  .btn-primary {
+    @apply w-full h-14 bg-primary-container text-on-primary rounded-xl font-bold text-base flex items-center justify-center gap-2 shadow-md transition-transform active:scale-95;
+  }
+
+  .card {
+    @apply bg-surface-container-lowest rounded-xl shadow-md;
+  }
+
+  .filter-chip {
+    @apply flex items-center flex-shrink-0 min-h-12 px-4 rounded-xl font-semibold text-sm shadow-sm transition-colors;
+  }
+
+  .mandi-card {
+    @apply bg-surface-container-lowest p-4 rounded-xl shadow-md space-y-3;
+  }
+}
+
+
+================================================================================
+FILE: src/pages/AuctionBoard.jsx
+================================================================================
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import api from '../api';
+
+const MOCK_LOTS = [
+  {
+    _id: 'lot-001', token: 'KQ-108', farmer: 'रामचंद्र पाटील', crop: '🧅 प्याज / Red Onion',
+    qty: 48.5, gradeBreakdown: [{ g: 'A', pct: 62, qty: 30.0 }, { g: 'B', pct: 25, qty: 12.1 }, { g: 'C', pct: 13, qty: 6.4 }],
+    arrivedAt: '08:42 AM', status: 'under_auction', weighbridgeId: 'WB-03', laneId: 'Lane B',
+  },
+];
+
+const BIDDERS = [
+  { id: 'TR-001', name: 'श्री कमोडिटी', grade: 'A', bid: 2890, time: '2 mins ago' },
+  { id: 'TR-002', name: 'महाराष्ट्र ट्रेडिंग', grade: 'A', bid: 3020, time: '1 min ago' },
+  { id: 'TR-003', name: 'नासिक एग्रो', grade: 'A', bid: 3150, time: '30 secs ago' },
+];
+
+export default function AuctionBoard() {
+  const navigate = useNavigate();
+  const [lots, setLots] = useState(MOCK_LOTS);
+  const [activeLot, setActiveLot] = useState(MOCK_LOTS[0]);
+  const [grade, setGrade] = useState('A');
+  const [bidInput, setBidInput] = useState('');
+  const [bids, setBids] = useState(BIDDERS);
+  const [hammer, setHammer] = useState(false);
+  const [bidError, setBidError] = useState('');
+
+  const highestBid = Math.max(...bids.filter(b => b.grade === grade).map(b => b.bid), 0);
+
+  const handleBid = () => {
+    const amt = Number(bidInput);
+    if (!amt || amt <= highestBid) {
+      setBidError('बोली वर्तमान उच्चतम बोली से अधिक होनी चाहिए।');
+      return;
+    }
+    setBidError('');
+    setBids(prev => [{ id: `TR-${Date.now()}`, name: 'नई बोली', grade, bid: amt, time: 'अभी' }, ...prev]);
+    setBidInput('');
+  };
+
+  const handleHammer = () => {
+    setHammer(true);
+    setTimeout(() => navigate('/payment-checkout', { state: { lot: activeLot, bid: highestBid, grade } }), 1500);
+  };
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-4 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Header */}
+        <header className="bg-primary rounded-xl p-4 shadow-md flex items-start justify-between">
+          <div>
+            <span className="text-on-primary/70 text-xs font-extrabold uppercase tracking-wider block mb-1">
+              <span className="material-symbols-outlined text-base align-middle">gavel</span>
+              नीलामी बोर्ड / Live Auction
+            </span>
+            <h1 className="text-xl font-bold text-on-primary">{activeLot.crop}</h1>
+            <p className="text-sm text-on-primary/80">{activeLot.farmer} • Token {activeLot.token}</p>
+          </div>
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-1.5 bg-secondary-fixed text-on-secondary-fixed px-2 py-1 rounded-full text-xs font-extrabold">
+              <span className="w-2 h-2 rounded-full bg-secondary animate-ping" />
+              LIVE
+            </div>
+            <span className="text-on-primary/70 text-xs">Weighbridge {activeLot.weighbridgeId}</span>
+          </div>
+        </header>
+
+        {/* Weighbridge results */}
+        <section className="bg-surface-container-lowest rounded-xl shadow-sm p-4">
+          <h2 className="text-sm font-extrabold text-on-surface-variant uppercase mb-3">तौल परिणाम / Weighbridge Result</h2>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="bg-primary-fixed rounded-lg p-2 text-center">
+              <span className="block text-xs text-on-primary-fixed-variant">कुल वजन</span>
+              <span className="block text-xl font-black text-primary">{activeLot.qty}</span>
+              <span className="block text-xs text-on-primary-fixed-variant">क्विंटल</span>
+            </div>
+            <div className="bg-secondary-fixed rounded-lg p-2 text-center">
+              <span className="block text-xs text-on-secondary-fixed-variant">आगमन</span>
+              <span className="block text-lg font-bold text-on-secondary-fixed">{activeLot.arrivedAt}</span>
+              <span className="block text-xs text-on-secondary-fixed-variant">समय</span>
+            </div>
+            <div className="bg-surface-container-low rounded-lg p-2 text-center">
+              <span className="block text-xs text-on-surface-variant">ग्रेड A</span>
+              <span className="block text-xl font-black text-secondary">{activeLot.gradeBreakdown[0].pct}%</span>
+              <span className="block text-xs text-on-surface-variant">{activeLot.gradeBreakdown[0].qty} क्विं</span>
+            </div>
+          </div>
+
+          {/* Grade bars */}
+          <div className="space-y-2">
+            {activeLot.gradeBreakdown.map(({ g, pct, qty }) => (
+              <div key={g} className="flex items-center gap-2">
+                <span className={`w-6 h-6 rounded-md flex items-center justify-center text-xs font-extrabold flex-shrink-0 ${g === 'A' ? 'bg-secondary-fixed text-on-secondary-fixed' : g === 'B' ? 'bg-tertiary-fixed text-on-tertiary-fixed' : 'bg-error-container text-on-error-container'}`}>{g}</span>
+                <div className="flex-1 bg-surface-container-low rounded-full h-3 overflow-hidden">
+                  <div style={{ width: `${pct}%` }} className={`h-3 rounded-full transition-all ${g === 'A' ? 'bg-secondary' : g === 'B' ? 'bg-tertiary-container' : 'bg-error'}`} />
+                </div>
+                <span className="text-sm font-bold text-on-surface w-20 text-right">{qty} क्विंटल ({pct}%)</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Grade selector */}
+        <div className="flex gap-2">
+          {['A', 'B', 'C'].map((g) => (
+            <button key={g} onClick={() => setGrade(g)} className={`flex-1 h-12 rounded-xl text-sm font-bold shadow-sm ${grade === g ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface'}`}>
+              Grade {g} {g === 'A' ? '★' : g === 'B' ? '☆' : '○'}
+            </button>
+          ))}
+        </div>
+
+        {/* Live bids */}
+        <section className="bg-surface-container-lowest rounded-xl shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 bg-surface-container-low">
+            <h2 className="text-sm font-extrabold text-on-surface uppercase">ग्रेड {grade} की बोलियां</h2>
+            <span className="flex items-center gap-1.5 text-xs font-bold text-secondary">
+              <span className="w-2 h-2 rounded-full bg-secondary animate-ping" />
+              लाइव बोली
+            </span>
+          </div>
+
+          {/* Highest bid */}
+          <div className="px-4 py-3 flex items-center justify-between border-b border-outline-variant/30">
+            <span className="text-sm text-on-surface-variant">वर्तमान उच्चतम बोली:</span>
+            <span className="text-2xl font-black text-secondary">₹{highestBid.toLocaleString('hi-IN')}/क्विं</span>
+          </div>
+
+          {bids.filter(b => b.grade === grade).map((b, i) => (
+            <div key={b.id} className={`flex items-center justify-between px-4 py-3 border-b border-outline-variant/20 ${i === 0 ? 'bg-secondary-fixed/20' : ''}`}>
+              <div className="flex items-center gap-2">
+                {i === 0 && <span className="material-symbols-outlined text-secondary text-lg">emoji_events</span>}
+                <div>
+                  <p className="text-sm font-bold text-on-surface">{b.name}</p>
+                  <p className="text-xs text-on-surface-variant">{b.id} • {b.time}</p>
+                </div>
+              </div>
+              <span className={`text-lg font-extrabold ${i === 0 ? 'text-secondary' : 'text-on-surface'}`}>₹{b.bid.toLocaleString('hi-IN')}</span>
+            </div>
+          ))}
+        </section>
+
+        {/* New bid input */}
+        <div className="bg-surface-container-lowest rounded-xl p-4 shadow-sm">
+          <label className="block text-sm font-bold text-on-surface mb-2">नई बोली दर्ज करें (₹/क्विंटल)</label>
+          <div className="flex gap-2">
+            <input
+              type="number"
+              value={bidInput}
+              onChange={(e) => setBidInput(e.target.value)}
+              placeholder={`> ₹${highestBid}`}
+              className="flex-1 h-14 px-4 text-xl font-bold text-on-surface bg-surface-container-low rounded-xl focus:outline-none"
+            />
+            <button onClick={handleBid} className="h-14 px-5 bg-primary text-on-primary rounded-xl text-sm font-bold shadow-sm">बोली लगाएं</button>
+          </div>
+          <div className="flex gap-2 mt-2">
+            {[50, 100, 200].map((n) => (
+              <button key={n} onClick={() => setBidInput(String(highestBid + n))} className="flex-1 h-11 rounded-lg bg-surface-container text-on-surface text-sm font-bold">+₹{n}</button>
+            ))}
+          </div>
+          {bidError && (
+            <p className="text-sm text-error bg-error-container px-3 py-2 rounded-lg mt-2">{bidError}</p>
+          )}
+        </div>
+
+        {/* Hammer CTA */}
+        <button
+          className={`w-full h-16 rounded-xl text-base font-bold shadow-xl flex items-center justify-center gap-2 transition-all ${hammer ? 'bg-secondary-fixed text-on-secondary-fixed scale-95' : 'bg-primary text-on-primary'}`}
+          onClick={handleHammer}
+          disabled={hammer}
+        >
+          <span className="material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>gavel</span>
+          {hammer ? 'सौदा पक्का! भुगतान की ओर...' : `हैमर करें – ₹${highestBid.toLocaleString('hi-IN')}/क्विंटल`}
+        </button>
+
+      </div>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/BookSlot.jsx
+================================================================================
+import { useState } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import api from '../api';
+
+const CROPS = [
+  { id: 'onion',    emoji: '🧅', hi: 'प्याज',    en: 'Red Onion',     tag: 'मुख्य मंडी उपज' },
+  { id: 'wheat',    emoji: '🌾', hi: 'गेहूं',    en: 'Sharbati Wheat', tag: 'नियमित भाव' },
+  { id: 'maize',    emoji: '🌽', hi: 'मक्का',    en: 'Yellow Maize',   tag: 'मांग में' },
+  { id: 'soybean',  emoji: '🌱', hi: 'सोयाबीन',  en: 'Soybean (Yellow)', tag: 'सीमित स्लॉट' },
+];
+
+const VEHICLES = [
+  { id: 'tractor', emoji: '🚜', label: 'ट्रैक्टर ट्रॉली' },
+  { id: 'pickup',  emoji: '🛻', label: 'पिकअप / छोटा हाथी' },
+  { id: 'bullock', emoji: '🐂', label: 'बैलगाड़ी' },
+];
+
+const SLOTS = [
+  { start: '08:00', end: '10:00', label: 'प्रातः 08:00 - 10:00 AM', avail: 12, desc: 'सबसे तेज प्रवेश (Fast Entry)', tag: 'अनुशंसित', tagCls: 'bg-primary text-on-primary', recommended: true },
+  { start: '10:00', end: '12:00', label: 'दोपहर 10:00 - 12:00 PM', avail: 8,  desc: 'सामान्य प्रतीक्षा', tag: 'खुला', tagCls: 'bg-surface-container text-on-surface-variant' },
+  { start: '12:00', end: '14:00', label: 'दोपहर 12:00 - 02:00 PM', avail: 4,  desc: 'मध्यम भीड़ (Heavy Traffic)', tag: 'सीमित', tagCls: 'bg-surface-container text-on-surface-variant' },
+  { start: '14:00', end: '16:00', label: 'अपराह्न 02:00 - 04:00 PM', avail: 18, desc: 'शाम की नीलामी', tag: 'खुला', tagCls: 'bg-surface-container text-on-surface-variant' },
+];
+
+export default function BookSlot() {
+  const navigate = useNavigate();
+  const { state } = useLocation();
+  const centre = state?.centre || { _id: '65f1a2b3c4d5e6f7a8b9c0d1', name: 'लासलगांव कृषि उपज मंडी', sub: 'Lasalgaon APMC Market Yard' };
+
+  const [crop, setCrop] = useState('onion');
+  const [qty, setQty] = useState(50);
+  const [vehicle, setVehicle] = useState('tractor');
+  const [vehicleNo, setVehicleNo] = useState('MH 15 AB 4521');
+  const [skipVehicle, setSkipVehicle] = useState(false);
+  const [selectedSlot, setSelectedSlot] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const today = new Date();
+  const dateStr = today.toISOString().split('T')[0];
+
+  const handleConfirm = async () => {
+    setError('');
+    setLoading(true);
+    const slot = SLOTS[selectedSlot];
+    const windowStart = new Date(`${dateStr}T${slot.start}:00.000Z`);
+    const windowEnd = new Date(`${dateStr}T${slot.end}:00.000Z`);
+    
+    // Exact schema enum mapping: '0-5q' | '5-15q' | '15q+'
+    const quantityBand = qty <= 5 ? '0-5q' : qty <= 15 ? '5-15q' : '15q+';
+    
+    // Ensure valid 24-character hex ObjectId for centreId
+    const validCentreId = (centre?._id && /^[0-9a-fA-F]{24}$/.test(centre._id))
+      ? centre._id
+      : '65f1a2b3c4d5e6f7a8b9c0d1';
+
+    try {
+      const { data } = await api.post('/bookings', {
+        centreId: validCentreId,
+        crop: CROPS.find((c) => c.id === crop)?.en || crop,
+        quantityBand,
+        arrivalWindowStart: windowStart.toISOString(),
+        arrivalWindowEnd: windowEnd.toISOString(),
+        channel: 'app',
+      });
+      if (data?.data) {
+        navigate('/live-token', { state: { booking: data.data } });
+      } else {
+        throw new Error('बुकिंग प्रतिक्रिया अमान्य है।');
+      }
+    } catch (err) {
+      const errMsg = err?.response?.data?.message || err?.message || 'स्लॉट बुकिंग विफल हुई। कृपया पुन: प्रयास करें।';
+      setError(errMsg);
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-24 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Header */}
+        <header className="flex items-center justify-between py-1">
+          <div className="flex items-center gap-2">
+            <div className="w-10 h-10 rounded-lg bg-primary-container text-on-primary flex items-center justify-center font-bold text-lg">KQ</div>
+            <div>
+              <span className="block text-lg font-bold text-primary leading-tight">KisanQ</span>
+              <span className="block text-xs text-on-surface-variant uppercase tracking-wider">Mandi Token AI</span>
+            </div>
+          </div>
+          <button className="w-11 h-11 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shadow-sm">
+            <span className="material-symbols-outlined text-2xl">volume_up</span>
+          </button>
+        </header>
+
+        {/* Stepper */}
+        <nav className="bg-surface-container-lowest rounded-xl p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            {[['✓', 'लासलगांव APMC', true, false], ['2', 'उपज व स्लॉट', true, true], ['3', 'गेट टोकन', false, false]].map(([num, label, done, active]) => (
+              <div key={label} className={`flex items-center gap-1.5 ${!done ? 'opacity-40' : ''}`}>
+                <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-extrabold ${done ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant'}`}>{num}</span>
+                <span className={`text-sm font-bold ${active ? 'text-primary' : done ? 'text-on-surface-variant' : 'text-on-surface-variant'}`}>{label}</span>
+              </div>
+            ))}
+          </div>
+          <div className="w-full bg-surface-container rounded-full h-1.5">
+            <div className="bg-primary h-1.5 rounded-full w-2/3 transition-all" />
+          </div>
+        </nav>
+
+        {/* Mandi card */}
+        <section className="bg-surface-container-lowest rounded-xl p-4 shadow-sm">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-secondary animate-ping" />
+                <span className="text-xs font-extrabold text-secondary uppercase">सुचारु संचालन • Yard Open</span>
+              </div>
+              <h1 className="text-lg font-bold text-on-surface">{centre.name}</h1>
+              <p className="text-sm text-on-surface-variant mt-0.5">{centre.sub}</p>
+            </div>
+            <button onClick={() => navigate('/mandi-selection')} className="px-3 py-1.5 rounded-lg bg-surface-container text-primary text-sm font-bold">बदलें</button>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mt-4 bg-surface-container-low p-3 rounded-lg">
+            <div>
+              <span className="text-xs text-on-surface-variant flex items-center gap-1"><span className="material-symbols-outlined text-xs text-secondary">event_available</span>उपलब्ध स्लॉट</span>
+              <span className="text-lg font-bold text-primary">42 स्लॉट बाकी</span>
+            </div>
+            <div>
+              <span className="text-xs text-on-surface-variant flex items-center gap-1"><span className="material-symbols-outlined text-xs text-secondary">local_shipping</span>लाइव कतार</span>
+              <span className="text-lg font-bold text-on-surface">14 ट्रॉलियां (18 मि.)</span>
+            </div>
+          </div>
+        </section>
+
+        {/* Commodity selection */}
+        <section>
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h2 className="text-lg font-bold text-on-surface">1. उपज का चयन करें</h2>
+              <p className="text-sm text-on-surface-variant">Select Crop being brought to mandi</p>
+            </div>
+            <span className="text-xs font-extrabold bg-primary text-on-primary px-2 py-0.5 rounded-full">अनिवार्य</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {CROPS.map((c) => (
+              <button key={c.id} onClick={() => setCrop(c.id)}
+                className={`flex flex-col items-start p-4 rounded-xl text-left shadow-sm transition-all ${crop === c.id ? 'bg-primary-fixed' : 'bg-surface-container-lowest hover:bg-surface-container-low'}`}
+              >
+                <div className="w-full flex items-center justify-between mb-2">
+                  <span className="text-3xl">{c.emoji}</span>
+                  <span className={`material-symbols-outlined text-xl ${crop === c.id ? 'text-primary' : 'text-outline-variant'}`}>
+                    {crop === c.id ? 'check_circle' : 'radio_button_unchecked'}
+                  </span>
+                </div>
+                <span className={`text-lg font-bold ${crop === c.id ? 'text-on-primary-fixed' : 'text-on-surface'}`}>{c.hi}</span>
+                <span className={`text-sm ${crop === c.id ? 'text-on-primary-fixed-variant' : 'text-on-surface-variant'}`}>{c.en}</span>
+                <span className={`mt-2 inline-block text-[10px] font-extrabold px-2 py-0.5 rounded-full ${crop === c.id ? 'bg-primary text-on-primary' : 'bg-surface-container text-on-surface-variant'}`}>{c.tag}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Quantity */}
+          <div className="mt-4 bg-surface-container-lowest rounded-xl p-4 shadow-sm">
+            <label className="block text-sm font-bold text-on-surface mb-2">अनुमानित मात्रा (Estimated Quantity)</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                value={qty}
+                onChange={(e) => setQty(Number(e.target.value))}
+                className="flex-1 h-14 px-4 text-2xl font-bold text-on-surface bg-surface-container-low rounded-xl focus:outline-none"
+              />
+              <div className="flex bg-surface-container-high rounded-xl p-1 h-14 items-center">
+                <button className="h-full px-3 rounded-lg bg-primary text-on-primary text-sm font-bold">क्विंटल</button>
+                <button className="h-full px-3 rounded-lg text-on-surface-variant text-sm font-bold">बोरी</button>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-3">
+              {[10, 25, 50].map((n) => (
+                <button key={n} onClick={() => setQty((q) => q + n)} className="px-3 py-2 rounded-lg bg-surface-container text-on-surface text-sm font-bold">+{n} क्विंटल</button>
+              ))}
+              <button onClick={() => setQty(40)} className="px-3 py-2 rounded-lg bg-surface-container-high text-on-surface text-sm font-bold">1 ट्रॉली (~40)</button>
+            </div>
+          </div>
+        </section>
+
+        {/* Date & slot */}
+        <section>
+          <h2 className="text-lg font-bold text-on-surface mb-2">2. तारीख व आगमन समय</h2>
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            {['आज • Today', 'कल • Tom', 'परसों'].map((d, i) => (
+              <button key={d} className={`flex flex-col items-center py-3 px-1 rounded-xl shadow-sm text-sm ${i === 0 ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface'}`}>
+                <span className="text-xs font-extrabold uppercase opacity-80">{d}</span>
+                <span className="text-lg font-bold mt-0.5">{24 + i} Oct</span>
+                <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full mt-1 ${i === 0 ? 'bg-secondary-container text-on-secondary-container' : 'bg-surface-container text-on-surface-variant'}`}>🟢 {i === 0 ? 'सुचारु' : 'खुला'}</span>
+              </button>
+            ))}
+          </div>
+          <div className="space-y-2">
+            {SLOTS.map((s, i) => (
+              <label key={i} className={`flex items-center justify-between p-4 rounded-xl cursor-pointer shadow-sm ${selectedSlot === i ? 'bg-primary-fixed' : 'bg-surface-container-lowest hover:bg-surface-container-low'}`}>
+                <div className="flex items-center gap-4">
+                  <input type="radio" name="slot" className="w-5 h-5 text-primary" checked={selectedSlot === i} onChange={() => setSelectedSlot(i)} />
+                  <div>
+                    <span className={`block text-lg font-bold ${selectedSlot === i ? 'text-on-primary-fixed' : 'text-on-surface'}`}>{s.label}</span>
+                    <span className={`block text-sm ${selectedSlot === i ? 'text-on-primary-fixed-variant' : 'text-on-surface-variant'}`}>{s.avail} स्लॉट शेष • {s.desc}</span>
+                  </div>
+                </div>
+                {s.recommended && <span className="text-xs font-extrabold bg-primary text-on-primary px-2.5 py-1 rounded-lg">अनुशंसित</span>}
+              </label>
+            ))}
+          </div>
+        </section>
+
+        {/* Vehicle */}
+        <section className="bg-surface-container-lowest rounded-xl p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h2 className="text-lg font-bold text-on-surface">3. वाहन विवरण</h2>
+              <p className="text-sm text-on-surface-variant">गेट एंट्री और तौल के लिए</p>
+            </div>
+            <span className="material-symbols-outlined text-secondary">verified_user</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            {VEHICLES.map((v) => (
+              <button key={v.id} onClick={() => setVehicle(v.id)}
+                className={`flex flex-col items-center justify-center p-3 rounded-xl shadow-sm text-sm font-bold ${vehicle === v.id ? 'bg-primary text-on-primary' : 'bg-surface-container text-on-surface'}`}
+              >
+                <span className="text-3xl mb-1">{v.emoji}</span>
+                <span className="text-center leading-tight">{v.label}</span>
+              </button>
+            ))}
+          </div>
+          <label className="block text-sm font-bold text-on-surface mb-1">वाहन नंबर (Optional)</label>
+          <input
+            className="w-full h-14 px-4 text-lg font-bold uppercase tracking-wider text-on-surface bg-surface-container-low rounded-xl focus:outline-none"
+            placeholder="उदा. MH 15 AB 1234"
+            value={vehicleNo}
+            onChange={(e) => setVehicleNo(e.target.value)}
+            disabled={skipVehicle}
+          />
+          <label className="flex items-center gap-2 mt-2 cursor-pointer">
+            <input type="checkbox" className="rounded text-primary w-4 h-4" checked={skipVehicle} onChange={(e) => setSkipVehicle(e.target.checked)} />
+            <span className="text-xs text-on-surface-variant">वाहन नंबर अभी याद नहीं / Will provide at Mandi Gate</span>
+          </label>
+        </section>
+
+        {/* Advisory */}
+        <section className="rounded-xl p-4 bg-secondary-container/40 flex items-start gap-3">
+          <span className="material-symbols-outlined text-secondary text-2xl shrink-0 mt-0.5">info</span>
+          <div>
+            <span className="block text-lg font-bold text-primary">अनुमानित तौल समय: मात्र 15-20 मिनट</span>
+            <p className="text-sm text-on-surface-variant mt-1">कृपया चुने गए समय स्लॉट से 15 मिनट पूर्व मंडी गेट नंबर 2 पर पहुंचे।</p>
+          </div>
+        </section>
+
+        {error && (
+          <div className="p-4 bg-error-container text-on-error-container rounded-xl text-sm font-bold flex items-center gap-2 shadow-sm">
+            <span className="material-symbols-outlined text-xl shrink-0">error</span>
+            <span>{error}</span>
+          </div>
+        )}
+
+        {/* CTA */}
+        <div className="sticky bottom-2 z-20">
+          <div className="bg-surface-container-lowest/95 backdrop-blur-md rounded-2xl p-3 shadow-xl flex flex-col items-center gap-2">
+            <button
+              className="w-full h-14 bg-primary text-on-primary font-bold text-base rounded-xl shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all"
+              onClick={handleConfirm}
+              disabled={loading}
+            >
+              {loading
+                ? <><span className="material-symbols-outlined animate-spin">refresh</span><span>टोकन जनरेट हो रहा है...</span></>
+                : <><span>स्लॉट पुष्टि करें और टोकन पाएं</span><span className="material-symbols-outlined text-xl">arrow_forward</span></>
+              }
+            </button>
+            <p className="text-xs text-on-surface-variant text-center flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-secondary text-base">verified</span>
+              निःशुल्क डिजिटल टोकन • कोई अग्रिम शुल्क या बैंक विवरण आवश्यक नहीं
+            </p>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/Dashboard.jsx
+================================================================================
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+const ACTIVE_TOKEN = {
+  token: 'KQ-108',
+  crop: '🧅 प्याज / Red Onion',
+  qty: '50 क्विंटल',
+  mandi: 'लासलगांव कृषि उपज मंडी',
+  slot: 'आज • 08:00 – 10:00 AM',
+  position: 14,
+  wait: '22 मिनट',
+  lane: 'Gate 2 → Lane B → W3',
+  status: 'queued',
+};
+
+const MANDIS = [
+  { name: 'लासलगांव कृषि उपज मंडी', status: 'green', slots: 42, wait: '15-20 मि.' },
+  { name: 'पिंपलगांव बसवंत APMC',  status: 'amber', slots: 18, wait: '45-60 मि.' },
+  { name: 'नासिक मुख्य मंडी',      status: 'red',   slots: 6,  wait: '90+ मि.' },
+];
+
+const ALERTS = [
+  { icon: 'warning',      cls: 'text-tertiary',  msg: 'KQ-095: Grace period expired.', time: '09:15 AM' },
+  { icon: 'info',         cls: 'text-primary',   msg: 'Lane B – प्रणाली अपडेट सफल।',  time: '10:42 AM' },
+  { icon: 'check_circle', cls: 'text-secondary', msg: 'लासलगांव – सभी सेवाएं सुचारु।', time: '11:00 AM' },
+];
+
+export default function Dashboard() {
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState('home');
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface font-jakarta pb-24">
+
+      {/* ── Top App Bar ── */}
+      <header className="sticky top-0 z-30 bg-surface/90 backdrop-blur-md px-4 py-3 flex items-center justify-between border-b border-outline-variant/20 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-primary flex items-center justify-center text-on-primary text-base font-black shadow-md">KQ</div>
+          <div>
+            <h1 className="text-base font-bold text-primary leading-none">KisanQ</h1>
+            <p className="text-[10px] text-on-surface-variant uppercase tracking-wider">e-Mandi Gateway</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigate('/mandi-selection')}
+            className="w-10 h-10 rounded-full bg-secondary-fixed text-on-secondary-fixed flex items-center justify-center shadow-sm active:scale-95 transition-transform"
+          >
+            <span className="material-symbols-outlined text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>volume_up</span>
+          </button>
+          <button
+            onClick={() => navigate('/live-token')}
+            className="w-10 h-10 rounded-full bg-surface-container-lowest text-on-surface flex items-center justify-center shadow-sm relative active:scale-95 transition-transform"
+          >
+            <span className="material-symbols-outlined text-xl">notifications</span>
+            <span className="absolute top-0.5 right-0.5 w-3 h-3 rounded-full bg-error border-2 border-surface" />
+          </button>
+        </div>
+      </header>
+
+      <div className="flex flex-col w-full max-w-md mx-auto px-4 gap-5 pt-4">
+
+        {/* ── Greeting banner ── */}
+        <div className="bg-gradient-to-br from-primary via-primary to-primary-container rounded-3xl p-5 shadow-2xl shadow-primary/20 relative overflow-hidden">
+          <div className="absolute -top-6 -right-6 w-32 h-32 rounded-full bg-on-primary/5" />
+          <div className="absolute bottom-0 right-4 text-7xl opacity-10 select-none">🌾</div>
+          <p className="text-xs text-on-primary/60 font-extrabold uppercase tracking-widest mb-1">किसान पोर्टल • Nashik District</p>
+          <h2 className="text-2xl font-black text-on-primary">नमस्ते, किसान! 🙏</h2>
+          <p className="text-on-primary/70 text-sm mt-1">आपकी मंडी यात्रा को आसान बनाने के लिए KisanQ तैयार है।</p>
+          <div className="mt-3 inline-flex items-center gap-2 bg-on-primary/10 rounded-xl px-3 py-2">
+            <span className="w-2 h-2 rounded-full bg-secondary-fixed animate-ping block" />
+            <span className="text-sm font-bold text-on-primary">लासलगांव मंडी – आज 42 स्लॉट उपलब्ध</span>
+          </div>
+        </div>
+
+        {/* ── ACTIVE TOKEN — Primary Focus ── */}
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-extrabold text-on-surface uppercase tracking-wider flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-secondary animate-ping block" />
+              मेरा सक्रिय टोकन / My Active Token
+            </h2>
+            <button onClick={() => navigate('/live-token')} className="text-xs text-primary font-bold flex items-center gap-0.5">
+              विवरण <span className="material-symbols-outlined text-sm">chevron_right</span>
+            </button>
+          </div>
+
+          <div
+            onClick={() => navigate('/live-token')}
+            className="bg-surface-container-lowest rounded-2xl shadow-xl overflow-hidden cursor-pointer active:scale-[0.98] transition-all ring-2 ring-primary/20"
+          >
+            {/* Token stripe */}
+            <div className="bg-gradient-to-r from-primary to-primary-container px-4 py-3 flex items-center justify-between">
+              <div>
+                <span className="text-on-primary/60 text-xs font-extrabold uppercase tracking-wider block">लासलगांव कृषि उपज मंडी</span>
+                <span className="text-on-primary text-xl font-black">{ACTIVE_TOKEN.token}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="flex items-center gap-1.5 bg-secondary-fixed text-on-secondary-fixed text-xs font-extrabold px-2 py-1 rounded-full">
+                  <span className="w-1.5 h-1.5 rounded-full bg-secondary animate-ping block" />
+                  लाइव
+                </span>
+              </div>
+            </div>
+
+            {/* Token body */}
+            <div className="p-4">
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                {[['उपज', ACTIVE_TOKEN.crop], ['मात्रा', ACTIVE_TOKEN.qty], ['आगमन', ACTIVE_TOKEN.slot], ['लेन', ACTIVE_TOKEN.lane]].map(([k, v]) => (
+                  <div key={k} className="bg-surface-container-low rounded-xl p-2.5">
+                    <span className="block text-xs text-on-surface-variant">{k}</span>
+                    <span className="block text-sm font-bold text-on-surface leading-tight truncate">{v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Queue position bar */}
+              <div className="flex items-center gap-3 bg-primary-fixed/30 rounded-xl px-3 py-2.5">
+                <div className="text-center">
+                  <span className="block text-3xl font-black text-primary leading-none">{ACTIVE_TOKEN.position}</span>
+                  <span className="block text-[10px] text-on-surface-variant">कतार में</span>
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-1 mb-1">
+                    <span className="text-sm font-bold text-on-surface">≈ {ACTIVE_TOKEN.wait} शेष</span>
+                  </div>
+                  <div className="flex gap-1">
+                    {[...Array(8)].map((_, i) => (
+                      <span key={i} className={`flex-1 h-2 rounded-full ${i < ACTIVE_TOKEN.position - 6 ? 'bg-error/40' : 'bg-primary/20'}`} />
+                    ))}
+                  </div>
+                </div>
+                <span className="material-symbols-outlined text-primary text-2xl">arrow_forward</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ── Quick Actions ── */}
+        <section>
+          <h2 className="text-sm font-extrabold text-on-surface-variant uppercase tracking-wider mb-3">त्वरित कार्य / Quick Actions</h2>
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { icon: 'confirmation_number', label: 'मंडी टोकन बुक करें', sub: 'Slot booking',  path: '/mandi-selection', cls: 'bg-primary text-on-primary' },
+              { icon: 'traffic',             label: 'लाइव कतार देखें',   sub: 'Queue status', path: '/live-token',       cls: 'bg-secondary text-on-secondary' },
+              { icon: 'gavel',               label: 'नीलामी बोर्ड',      sub: 'Live auction', path: '/auction-board',    cls: 'bg-tertiary-container text-on-tertiary-fixed' },
+              { icon: 'lock_person',         label: 'Staff Login',        sub: 'Gate Terminal',path: '/staff-login',      cls: 'bg-surface-container-high text-on-surface' },
+            ].map((a) => (
+              <button
+                key={a.label}
+                onClick={() => navigate(a.path)}
+                className={`flex flex-col items-start p-4 rounded-2xl shadow-sm transition-all active:scale-95 ${a.cls}`}
+              >
+                <span className="material-symbols-outlined text-3xl mb-2 block" style={{ fontVariationSettings: "'FILL' 1" }}>{a.icon}</span>
+                <span className="text-sm font-bold leading-tight">{a.label}</span>
+                <span className="text-xs opacity-60 mt-0.5">{a.sub}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* ── Mandi Status ── */}
+        <section>
+          <h2 className="text-sm font-extrabold text-on-surface-variant uppercase tracking-wider mb-3">मंडी स्थिति / Market Status</h2>
+          <div className="space-y-2">
+            {MANDIS.map((m) => (
+              <div key={m.name} className="bg-surface-container-lowest rounded-2xl p-3 shadow-sm flex items-center gap-3">
+                <span className={`w-3 h-3 rounded-full shrink-0 ${m.status === 'green' ? 'bg-secondary animate-pulse' : m.status === 'amber' ? 'bg-tertiary-container' : 'bg-error animate-pulse'}`} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-on-surface truncate">{m.name}</p>
+                  <p className="text-xs text-on-surface-variant">{m.slots} स्लॉट • {m.wait}</p>
+                </div>
+                <button
+                  onClick={() => navigate('/mandi-selection')}
+                  className="h-9 px-3 bg-primary text-on-primary rounded-xl text-xs font-bold shrink-0 active:scale-95 transition-transform"
+                >
+                  बुक करें
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ── Live Alerts ── */}
+        <section className="bg-surface-container-lowest rounded-2xl shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 bg-surface-container-low">
+            <h2 className="text-sm font-extrabold text-on-surface">लाइव अलर्ट</h2>
+            <span className="flex items-center gap-1.5 text-xs font-bold text-secondary">
+              <span className="w-2 h-2 rounded-full bg-secondary animate-ping" />लाइव
+            </span>
+          </div>
+          {ALERTS.map((a, i) => (
+            <div key={i} className="flex items-start gap-3 px-4 py-3 border-b border-outline-variant/20 last:border-0">
+              <span className={`material-symbols-outlined text-xl ${a.cls} shrink-0 mt-0.5`} style={{ fontVariationSettings: "'FILL' 1" }}>{a.icon}</span>
+              <div className="flex-1">
+                <p className="text-sm text-on-surface">{a.msg}</p>
+                <p className="text-xs text-on-surface-variant mt-0.5">{a.time}</p>
+              </div>
+            </div>
+          ))}
+        </section>
+
+        {/* ── Zero Data Footer ── */}
+        <div className="bg-surface-container-low rounded-2xl p-4 flex items-start gap-3">
+          <span className="material-symbols-outlined text-secondary text-xl shrink-0 mt-0.5" style={{ fontVariationSettings: "'FILL' 1" }}>shield</span>
+          <div>
+            <p className="text-sm font-bold text-on-surface">शून्य डेटा नीति / Zero Data Policy</p>
+            <p className="text-xs text-on-surface-variant mt-0.5">KisanQ कोई आधार, बैंक खाता या संवेदनशील जानकारी संग्रहीत नहीं करता।</p>
+          </div>
+        </div>
+
+      </div>
+
+      {/* ── Bottom Nav ── */}
+      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-surface-container-lowest/95 backdrop-blur-md shadow-xl px-4 py-2 flex items-center justify-around z-50 rounded-t-2xl border-t border-outline-variant/20">
+        {[
+          { icon: 'home', label: 'होम', path: '/dashboard' },
+          { icon: 'storefront', label: 'मंडी', path: '/mandi-selection' },
+          { icon: 'confirmation_number', label: 'टोकन', path: '/live-token' },
+          { icon: 'gavel', label: 'नीलामी', path: '/auction-board' },
+          { icon: 'admin_panel_settings', label: 'Staff', path: '/staff-login' },
+        ].map(({ icon, label, path }) => {
+          const active = path === '/dashboard';
+          return (
+            <button key={label} onClick={() => navigate(path)} className={`flex flex-col items-center flex-1 py-1 transition-colors ${active ? 'text-primary' : 'text-on-surface-variant'}`}>
+              <div className={active ? 'bg-primary-fixed px-3 py-1 rounded-full mb-0.5' : 'py-1 mb-0.5'}>
+                <span className="material-symbols-outlined text-xl" style={active ? { fontVariationSettings: "'FILL' 1" } : {}}>{icon}</span>
+              </div>
+              <span className="text-[10px] font-extrabold">{label}</span>
+            </button>
+          );
+        })}
+      </nav>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/GuardTerminal.jsx
+================================================================================
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
+import api from '../api';
+
+const API_BASE = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
+
+const MOCK_QUEUE = [
+  { token: 'KQ-105', farmer: 'विजय पाटील', qty: '45 क्विंटल', vehicle: 'MH 15 AB 1234', status: 'called', wait: 0, crop: '🧅 प्याज' },
+  { token: 'KQ-106', farmer: 'रामदास शिंदे', qty: '30 क्विंटल', vehicle: 'MH 09 CD 5678', status: 'queued', wait: 8, crop: '🌾 गेहूं' },
+  { token: 'KQ-107', farmer: 'सुरेश जाधव', qty: '55 क्विंटल', vehicle: 'MH 15 GH 9012', status: 'queued', wait: 16, crop: '🌽 मक्का' },
+  { token: 'KQ-108', farmer: '(आप / You)', qty: '50 क्विंटल', vehicle: 'MH 15 AB 4521', status: 'queued', wait: 22, crop: '🧅 प्याज', isMe: true },
+  { token: 'KQ-109', farmer: 'रमेश निकम', qty: '25 क्विंटल', vehicle: 'MH 15 JK 3456', status: 'queued', wait: 30, crop: '🌱 सोयाबीन' },
+  { token: 'KQ-110', farmer: 'सुनील वाघ', qty: '38 क्विंटल', vehicle: 'MH 26 MN 7890', status: 'queued', wait: 38, crop: '🧅 प्याज' },
+];
+
+const STATUS_CFG = {
+  called:  { dot: 'bg-secondary animate-ping', lbl: 'बुलाया जा रहा / Being Called', badge: 'bg-secondary-fixed text-on-secondary-fixed' },
+  queued:  { dot: 'bg-primary-container',      lbl: 'प्रतीक्षारत / Waiting',         badge: 'bg-surface-container text-on-surface-variant' },
+  arrived: { dot: 'bg-primary',                lbl: 'पहुंच गए / Arrived',             badge: 'bg-primary-fixed text-on-primary-fixed' },
+};
+
+export default function GuardTerminal() {
+  const navigate = useNavigate();
+  const [queue, setQueue]               = useState(MOCK_QUEUE);
+  const [activeFilter, setActiveFilter] = useState('all');
+  // QR scanner state
+  const [scanInput, setScanInput]       = useState('');
+  const [scannedEntry, setScannedEntry] = useState(null);
+  const [scanError, setScanError]       = useState('');
+  // Big CTA state
+  const [entryLoading, setEntryLoading] = useState(false);
+  const [entrySuccess, setEntrySuccess] = useState(false);
+  const scanRef = useRef(null);
+
+  useEffect(() => {
+    const centreId = '65f1a2b3c4d5e6f7a8b9c0d1';
+    api.get(`/queue/live/${centreId}`).then(({ data }) => {
+      if (data?.data?.entries) setQueue(data.data.entries);
+      else if (data?.data?.length) setQueue(data.data);
+    }).catch(() => {});
+
+    const socket = io(API_BASE, { auth: { token: localStorage.getItem('kq_token') } });
+    socket.on('connect', () => {
+      socket.emit('join_centre_queue', centreId);
+    });
+
+    socket.on('queue:update', (data) => {
+      if (Array.isArray(data)) setQueue(data);
+      else if (data?.entries) setQueue(data.entries);
+    });
+    return () => socket.disconnect();
+  }, []);
+
+  const visible = activeFilter === 'all' ? queue : queue.filter((q) => q.status === activeFilter);
+
+  const handleCheckin = async (token) => {
+    try { await api.post(`/queue/${token}/check-in`); } catch { /* optimistic */ }
+    setQueue((q) => q.map((e) => e.token === token ? { ...e, status: 'arrived' } : e));
+    if (scannedEntry?.token === token) setScannedEntry((p) => p ? { ...p, status: 'arrived' } : p);
+  };
+
+  // ── QR / manual token lookup ──────────────────────────────────────────────
+  const handleScan = () => {
+    const id = scanInput.trim().toUpperCase();
+    if (!id) return;
+    const norm = id.startsWith('KQ-') ? id : id.startsWith('KQ') ? `KQ-${id.slice(2)}` : `KQ-${id}`;
+    const found = queue.find((e) => e.token === norm);
+    if (found) { setScannedEntry(found); setScanError(''); }
+    else { setScannedEntry(null); setScanError(`टोकन "${norm}" कतार में नहीं मिला।`); }
+  };
+
+  // ── Big "ALLOW ENTRY" CTA ─────────────────────────────────────────────────
+  const handleAllowEntry = async () => {
+    if (!scannedEntry) return;
+    setEntryLoading(true);
+    try { await api.post(`/queue/${scannedEntry.token}/check-in`); } catch { /* optimistic */ }
+    setQueue((q) => q.map((e) => e.token === scannedEntry.token ? { ...e, status: 'arrived' } : e));
+    setEntryLoading(false);
+    setEntrySuccess(true);
+  };
+
+  const resetScan = () => {
+    setScanInput(''); setScannedEntry(null);
+    setScanError(''); setEntrySuccess(false);
+    setTimeout(() => scanRef.current?.focus(), 50);
+  };
+
+  // ── Full-screen success screen ──────────────────────────────────────────
+  if (entrySuccess && scannedEntry) {
+    return (
+      <main className="flex flex-col min-h-screen bg-surface items-center justify-center px-4 font-jakarta">
+        <div className="w-full max-w-md flex flex-col items-center gap-6 text-center">
+          <div className="w-28 h-28 rounded-full bg-secondary-fixed flex items-center justify-center shadow-xl">
+            <span className="material-symbols-outlined text-6xl text-on-secondary-fixed" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+          </div>
+          <div>
+            <p className="text-xs font-extrabold text-secondary uppercase tracking-widest mb-1">प्रवेश पूर्ण / Entry Complete</p>
+            <h1 className="text-3xl font-black text-primary">Gate Open!</h1>
+            <p className="text-sm text-on-surface-variant mt-1">Farmer has been granted entry.</p>
+          </div>
+          <div className="bg-surface-container-lowest rounded-2xl p-5 w-full shadow-md text-left space-y-2.5">
+            <div className="flex items-center gap-3 pb-3 border-b border-outline-variant/30">
+              <div className="w-14 h-14 rounded-xl bg-primary text-on-primary flex items-center justify-center text-2xl font-black shadow-sm">
+                {scannedEntry.token.split('-')[1]}
+              </div>
+              <div>
+                <p className="text-lg font-bold text-on-surface">{scannedEntry.token}</p>
+                <p className="text-sm text-on-surface-variant">{scannedEntry.farmer}</p>
+              </div>
+            </div>
+            {[['उपज', scannedEntry.crop], ['मात्रा', scannedEntry.qty], ['वाहन', scannedEntry.vehicle], ['गेट', 'Gate No. 2 → Lane B → W3']].map(([k, v]) => (
+              <div key={k} className="flex justify-between">
+                <span className="text-sm text-on-surface-variant">{k}</span>
+                <span className="text-sm font-bold text-on-surface">{v}</span>
+              </div>
+            ))}
+            <div className="mt-1 bg-secondary-fixed/20 rounded-xl px-3 py-2 flex items-center gap-2">
+              <span className="material-symbols-outlined text-secondary text-base">schedule</span>
+              <span className="text-sm font-bold text-secondary">
+                {new Date().toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' })} — Entry logged
+              </span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 w-full">
+            <button onClick={resetScan} className="h-14 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 shadow-md active:scale-95 transition-transform">
+              <span className="material-symbols-outlined text-xl">qr_code_scanner</span>
+              अगला स्कैन
+            </button>
+            <button onClick={() => navigate(-1)} className="h-14 bg-surface-container-lowest text-on-surface rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm">
+              <span className="material-symbols-outlined text-xl">list</span>
+              वापस जाएं
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-4 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Header */}
+        <header className="bg-surface-container-lowest rounded-xl shadow-sm p-3">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="flex items-center gap-1.5 text-xs font-extrabold text-secondary uppercase tracking-wider mb-1">
+                <span className="material-symbols-outlined text-base">lock</span>
+                Staff Gate Terminal
+              </div>
+              <h1 className="text-lg font-bold text-on-surface">लासलगांव मंडी – गेट नं. 2</h1>
+              <p className="text-sm text-on-surface-variant">Gate Entry & Queue Display Dashboard</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-bold bg-secondary-fixed text-on-secondary-fixed px-2 py-1 rounded-full">
+                <span className="w-2 h-2 rounded-full bg-secondary block" />
+                लाइव
+              </div>
+              <span className="material-symbols-outlined text-on-surface text-2xl">account_circle</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mt-3">
+            {[['confirmation_number', 'कुल टोकन', queue.length], ['call_to_action', 'वर्तमान कतार', queue.filter(q => q.status === 'queued').length], ['check_circle', 'चेक-इन', queue.filter(q => q.status === 'arrived').length]].map(([icon, label, val]) => (
+              <div key={label} className="bg-surface-container-low rounded-lg p-2 text-center">
+                <span className="material-symbols-outlined text-xl text-primary block">{icon}</span>
+                <span className="block text-xs text-on-surface-variant">{label}</span>
+                <span className="block text-xl font-bold text-on-surface">{val}</span>
+              </div>
+            ))}
+          </div>
+        </header>
+
+        {/* Scan banner */}
+        <div className="bg-primary-fixed rounded-xl p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-xs font-extrabold text-on-primary-fixed-variant uppercase">QR SCANNER ACTIVE</span>
+              <h2 className="text-xl font-bold text-on-primary-fixed">QR कोड स्कैन करें</h2>
+              <p className="text-sm text-on-primary-fixed-variant">Hold farmer's token under scanner or enter manually</p>
+            </div>
+            <div className="w-16 h-16 rounded-xl bg-surface-container-lowest flex items-center justify-center shadow-md">
+              <span className="material-symbols-outlined text-4xl text-primary">qr_code_scanner</span>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-3">
+            <input
+              ref={scanRef}
+              id="guard-scan-input"
+              className="flex-1 h-12 px-3 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-bold tracking-wider focus:outline-none focus:ring-2 focus:ring-primary"
+              placeholder='Token ID: KQ-108 या सिर्फ "108"'
+              value={scanInput}
+              onChange={(e) => setScanInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleScan()}
+            />
+            <button
+              id="guard-verify-btn"
+              onClick={handleScan}
+              className="h-12 px-4 bg-primary text-on-primary rounded-xl text-sm font-bold shadow-sm active:scale-95 transition-transform"
+            >Verify</button>
+          </div>
+          {scanError && <p className="mt-2 text-sm text-error bg-error-container/80 px-3 py-1.5 rounded-lg">{scanError}</p>}
+        </div>
+
+        {/* Scanned token panel + BIG CTA */}
+        {scannedEntry && (
+          <div className="bg-surface-container-lowest rounded-2xl shadow-xl overflow-hidden ring-2 ring-primary">
+            <div className="bg-gradient-to-r from-primary to-primary-container px-5 py-3 flex items-center justify-between">
+              <div>
+                <span className="text-on-primary/70 text-xs font-extrabold uppercase tracking-wider block">स्कैन किया गया टोकन</span>
+                <span className="text-on-primary text-xl font-bold">{scannedEntry.token}</span>
+              </div>
+              <span className={`px-3 py-1.5 rounded-xl text-xs font-extrabold ${STATUS_CFG[scannedEntry.status]?.badge}`}>
+                {STATUS_CFG[scannedEntry.status]?.lbl}
+              </span>
+            </div>
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                {[['किसान', scannedEntry.farmer], ['उपज', scannedEntry.crop], ['मात्रा', scannedEntry.qty], ['वाहन', scannedEntry.vehicle]].map(([k, v]) => (
+                  <div key={k} className="bg-surface-container-low rounded-xl p-2.5">
+                    <span className="block text-xs text-on-surface-variant">{k}</span>
+                    <span className="block text-sm font-bold text-on-surface leading-snug">{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-secondary-fixed/20 rounded-xl p-3 flex items-center gap-2">
+                <span className="material-symbols-outlined text-secondary text-xl">fork_right</span>
+                <div>
+                  <span className="block text-xs text-on-surface-variant">निर्देशित मार्ग</span>
+                  <span className="block text-sm font-bold text-on-surface">Gate No. 2 → Lane B → Weighbridge W3</span>
+                </div>
+              </div>
+              {scannedEntry.status === 'arrived' ? (
+                <div className="w-full h-16 bg-secondary-fixed text-on-secondary-fixed rounded-xl flex items-center justify-center gap-3 text-base font-bold">
+                  <span className="material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+                  प्रवेश पूर्ण / Entry Already Done
+                </div>
+              ) : (
+                <button
+                  id="guard-allow-entry-btn"
+                  onClick={handleAllowEntry}
+                  disabled={entryLoading}
+                  className="w-full h-16 bg-primary text-on-primary rounded-xl flex items-center justify-center gap-3 text-base font-bold shadow-xl active:scale-95 transition-all disabled:opacity-70"
+                >
+                  {entryLoading
+                    ? <><span className="material-symbols-outlined text-2xl animate-spin">autorenew</span><span>प्रवेश दर्ज हो रहा है...</span></>
+                    : <><span className="material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>door_open</span><span>ALLOW ENTRY &amp; PRINT SLIP</span></>
+                  }
+                </button>
+              )}
+              <button onClick={resetScan} className="w-full h-10 bg-surface-container text-on-surface-variant rounded-xl text-sm font-bold">रद्द करें / Clear Scan</button>
+            </div>
+          </div>
+        )}
+
+        {/* Filter */}
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {[['all', 'सभी'], ['called', 'बुलाए गए'], ['queued', 'प्रतीक्षारत'], ['arrived', 'पहुंचे']].map(([f, label]) => (
+            <button
+              key={f}
+              onClick={() => setActiveFilter(f)}
+              className={`filter-chip ${activeFilter === f ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface'}`}
+            >{label}</button>
+          ))}
+        </div>
+
+        {/* Queue list */}
+        <div className="flex flex-col gap-3">
+          {visible.map((entry) => {
+            const cfg = STATUS_CFG[entry.status] || STATUS_CFG.queued;
+            return (
+              <div key={entry.token} className={`bg-surface-container-lowest rounded-xl p-4 shadow-sm ${entry.isMe ? 'ring-2 ring-primary' : ''}`}>
+                {entry.isMe && (
+                  <div className="flex items-center gap-1.5 text-xs font-extrabold text-primary mb-2">
+                    <span className="material-symbols-outlined text-base">person</span>
+                    आपका टोकन / Your Token
+                  </div>
+                )}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-3">
+                    <div className="relative">
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-sm font-black ${entry.isMe ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface'}`}>
+                        {entry.token.split('-')[1]}
+                      </div>
+                      <span className={`absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full ${cfg.dot}`} />
+                    </div>
+                    <div>
+                      <p className="text-lg font-bold text-on-surface">{entry.token}</p>
+                      <p className="text-sm text-on-surface-variant">{entry.farmer}</p>
+                    </div>
+                  </div>
+                  <span className={`text-xs font-extrabold px-2 py-1 rounded-lg ${cfg.badge}`}>{cfg.lbl}</span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 mt-3">
+                  <div className="bg-surface-container-low p-2 rounded-lg">
+                    <span className="text-xs text-on-surface-variant block">उपज</span>
+                    <span className="text-sm font-bold">{entry.crop}</span>
+                  </div>
+                  <div className="bg-surface-container-low p-2 rounded-lg">
+                    <span className="text-xs text-on-surface-variant block">मात्रा</span>
+                    <span className="text-sm font-bold">{entry.qty}</span>
+                  </div>
+                  <div className="bg-surface-container-low p-2 rounded-lg">
+                    <span className="text-xs text-on-surface-variant block">वाहन</span>
+                    <span className="text-sm font-bold truncate">{entry.vehicle}</span>
+                  </div>
+                </div>
+
+                {entry.status === 'queued' && (
+                  <div className="flex gap-2 mt-3">
+                    <button onClick={() => handleCheckin(entry.token)} className="flex-1 h-11 bg-secondary text-on-secondary rounded-xl text-sm font-bold flex items-center justify-center gap-1.5">
+                      <span className="material-symbols-outlined text-lg" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+                      चेक-इन करें
+                    </button>
+                    <button className="flex-1 h-11 bg-surface-container-high text-on-surface rounded-xl text-sm font-bold flex items-center justify-center gap-1.5">
+                      <span className="material-symbols-outlined text-lg">call</span>
+                      बुलाएं
+                    </button>
+                  </div>
+                )}
+                {entry.status === 'called' && (
+                  <div className="mt-3 bg-secondary-fixed text-on-secondary-fixed px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-bold">
+                    <span className="material-symbols-outlined text-lg">campaign</span>
+                    अनाउंसमेंट जारी / Announcement Active
+                  </div>
+                )}
+                {entry.status === 'arrived' && (
+                  <div className="mt-3 bg-primary-fixed text-on-primary-fixed px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-bold">
+                    <span className="material-symbols-outlined text-lg" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+                    प्रवेश पूर्ण / Entry Complete
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/Landing.jsx
+================================================================================
+import { useNavigate } from 'react-router-dom';
+
+export default function Landing() {
+  const navigate = useNavigate();
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface font-jakarta overflow-hidden relative">
+
+      {/* Background decorative circles */}
+      <div className="absolute -top-24 -right-24 w-72 h-72 rounded-full bg-primary opacity-5 blur-3xl pointer-events-none" />
+      <div className="absolute -bottom-24 -left-24 w-72 h-72 rounded-full bg-secondary opacity-5 blur-3xl pointer-events-none" />
+
+      <div className="flex flex-col w-full max-w-md mx-auto px-6 py-8 gap-6 min-h-screen relative z-10">
+
+        {/* Hero */}
+        <div className="flex-1 flex flex-col items-center justify-center text-center gap-5 pt-8">
+          {/* Logo mark */}
+          <div className="relative">
+            <div className="w-24 h-24 rounded-3xl bg-primary flex items-center justify-center shadow-2xl shadow-primary/30">
+              <span className="text-on-primary text-4xl font-black tracking-tight">KQ</span>
+            </div>
+            <span className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-secondary-fixed flex items-center justify-center shadow-md">
+              <span className="material-symbols-outlined text-on-secondary-fixed text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+            </span>
+          </div>
+
+          <div>
+            <h1 className="text-4xl font-black text-primary tracking-tight">KisanQ</h1>
+            <p className="text-sm font-extrabold text-secondary uppercase tracking-widest mt-1">e-Mandi Digital Gateway</p>
+            <p className="text-xs text-on-surface-variant mt-2">SIH 2026 • नासिक कृषि उपज मंडी</p>
+          </div>
+
+          {/* Trust strip */}
+          <div className="flex items-center gap-4 bg-surface-container-low px-5 py-3 rounded-2xl shadow-sm">
+            {[['shield', 'Govt. Backed'], ['lock', 'Zero Aadhaar'], ['support_agent', '24x7 Help']].map(([icon, label]) => (
+              <div key={label} className="flex flex-col items-center gap-1">
+                <span className="material-symbols-outlined text-secondary text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>{icon}</span>
+                <span className="text-[10px] font-extrabold text-on-surface-variant uppercase tracking-wide text-center leading-tight">{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Role Selection */}
+        <div className="flex flex-col gap-4 pb-8">
+          <p className="text-center text-sm font-bold text-on-surface-variant uppercase tracking-widest">आप कौन हैं? / Select Your Role</p>
+
+          {/* Farmer CTA — primary, full width, large */}
+          <button
+            id="landing-farmer-btn"
+            onClick={() => navigate('/farmer-login')}
+            className="w-full bg-primary text-on-primary rounded-2xl p-6 flex items-center gap-5 shadow-xl shadow-primary/25 active:scale-95 transition-all text-left"
+          >
+            <div className="w-16 h-16 rounded-2xl bg-on-primary/10 flex items-center justify-center shrink-0">
+              <span className="text-4xl">👨‍🌾</span>
+            </div>
+            <div className="flex-1">
+              <span className="block text-xl font-black">मैं एक किसान हूँ</span>
+              <span className="block text-sm text-on-primary/70 mt-0.5">I am a Farmer</span>
+              <span className="block text-xs text-on-primary/50 mt-1.5">टोकन बुक करें • कतार देखें • भुगतान पाएं</span>
+            </div>
+            <span className="material-symbols-outlined text-on-primary/50 text-3xl">arrow_forward_ios</span>
+          </button>
+
+          {/* Staff CTA — secondary */}
+          <button
+            id="landing-staff-btn"
+            onClick={() => navigate('/staff-login')}
+            className="w-full bg-surface-container-lowest text-on-surface rounded-2xl p-5 flex items-center gap-4 shadow-md border border-outline-variant/30 active:scale-95 transition-all text-left"
+          >
+            <div className="w-14 h-14 rounded-2xl bg-primary-container flex items-center justify-center shrink-0">
+              <span className="text-3xl">🏛️</span>
+            </div>
+            <div className="flex-1">
+              <span className="block text-lg font-bold text-on-surface">मंडी अधिकारी</span>
+              <span className="block text-sm text-on-surface-variant">Mandi Staff / Admin</span>
+              <span className="block text-xs text-on-surface-variant/60 mt-1">Gate Guard • Supervisor • Auctioneer</span>
+            </div>
+            <span className="material-symbols-outlined text-on-surface-variant text-2xl">arrow_forward_ios</span>
+          </button>
+
+          {/* Footer */}
+          <div className="text-center pt-2">
+            <p className="text-xs text-on-surface-variant">
+              समस्या? <a href="tel:18001801551" className="text-primary font-bold">1800-180-1551</a> (Toll Free • 24x7)
+            </p>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/LiveToken.jsx
+================================================================================
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { io } from 'socket.io-client';
+import api from '../api';
+
+const API_BASE = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
+const POLL_INTERVAL_MS = 10_000; // 10s HTTP fallback when WS disconnected
+
+export default function LiveToken() {
+  const navigate = useNavigate();
+  const { state } = useLocation();
+  const booking = state?.booking;
+  const [tokenData, setTokenData] = useState({
+    token: booking?.tokenNumber || 'KQ-108',
+    farmerId: 'FMR-MH-4521',
+    crop: 'प्याज / Red Onion',
+    qty: '50 क्विंटल',
+    arrival: '08:00 AM - 10:00 AM',
+    position: 14,
+    estimatedWait: 22,
+    status: 'queued',
+    lane: 'Gate No. 2 → Lane B → Weighbridge W3',
+    centreId: booking?.centreId || null,
+  });
+  const [timer, setTimer] = useState(tokenData.estimatedWait * 60);
+  const [wsConnected, setWsConnected] = useState(false);
+  const pollRef = useRef(null);
+
+  // ── HTTP polling fallback ─────────────────────────────────────────────────
+  const pollPosition = useCallback(async () => {
+    if (!booking?._id || !tokenData.centreId) return;
+    try {
+      const { data } = await api.get(
+        `/queue/${tokenData.centreId}/position/${booking._id}`
+      );
+      if (data?.data) {
+        setTokenData((prev) => ({ ...prev, ...data.data }));
+        setTimer((data.data.estimatedWait || 0) * 60);
+      }
+    } catch {
+      // Network error during poll — silently retry next tick
+    }
+  }, [booking, tokenData.centreId]);
+
+  const startPolling = useCallback(() => {
+    if (pollRef.current) return; // already running
+    pollPosition(); // immediate fetch
+    pollRef.current = setInterval(pollPosition, POLL_INTERVAL_MS);
+  }, [pollPosition]);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  // ── Socket.IO with automatic fallback ────────────────────────────────────
+  useEffect(() => {
+    const timerInterval = setInterval(
+      () => setTimer((t) => (t > 0 ? t - 1 : 0)),
+      1000
+    );
+
+    const socket = io(API_BASE, {
+      auth: { token: localStorage.getItem('kq_token') },
+      reconnectionAttempts: 5,
+      reconnectionDelay: 2000,
+    });
+
+    socket.on('connect', () => {
+      setWsConnected(true);
+      stopPolling(); // WS is live — stop HTTP polling
+      if (booking?.centreId) {
+        socket.emit('join_centre_queue', booking.centreId);
+      }
+    });
+
+    socket.on('disconnect', () => {
+      setWsConnected(false);
+      startPolling(); // WS dropped — fall back to HTTP polling
+    });
+
+    socket.on('connect_error', () => {
+      setWsConnected(false);
+      startPolling(); // Initial WS failure — fall back immediately
+    });
+
+    socket.on('queue:update', (data) => {
+      if (data) {
+        setTokenData((prev) => ({ ...prev, ...data }));
+        if (data.estimatedWait !== undefined) {
+          setTimer((data.estimatedWait || 0) * 60);
+        }
+      }
+    });
+
+    return () => {
+      clearInterval(timerInterval);
+      stopPolling();
+      socket.disconnect();
+    };
+  }, [booking, startPolling, stopPolling]);
+
+  const fmt = (s) =>
+    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+  // ── Action handlers ────────────────────────────────────────────────────────────────────────
+  const shareToken = async () => {
+    const text = `📍 KisanQ गेट पास
+तोकन: ${tokenData.token}
+उपज: ${tokenData.crop}
+मात्रा: ${tokenData.qty}
+लान: ${tokenData.lane}
+जानकारी: http://localhost:5173/live-token`;
+    if (navigator.share) {
+      try { await navigator.share({ title: `KisanQ Token ${tokenData.token}`, text }); } catch { /* user cancelled */ }
+    } else {
+      await navigator.clipboard.writeText(text);
+      // Show brief feedback via title flash
+      document.title = '✅ Token Copied!';
+      setTimeout(() => { document.title = 'KisanQ – किसान डिजिटल मंडी पोर्टल'; }, 2000);
+    }
+  };
+
+  const printToken = () => window.print();
+
+  const cancelToken = () => {
+    if (window.confirm('क्या आप वाकई यह निवेदन रद्द करना चाहते हैं?')) {
+      navigate('/mandi-selection');
+    }
+  };
+
+  const STATUS_LABEL = {
+    queued:    { label: 'कतार में • In Queue',     cls: 'bg-tertiary-fixed text-on-tertiary-fixed' },
+    called:    { label: 'आपकी बारी • Your Turn!',  cls: 'bg-secondary-fixed text-on-secondary-fixed animate-bounce' },
+    arrived:   { label: 'पहुंच गए • Arrived',       cls: 'bg-primary-fixed text-on-primary-fixed' },
+    completed: { label: 'पूर्ण • Done',              cls: 'bg-surface-container text-on-surface' },
+  };
+  const st = STATUS_LABEL[tokenData.status] || STATUS_LABEL.queued;
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-28 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Header */}
+        <header className="flex items-center justify-between py-1">
+          <div className="flex items-center gap-2">
+            <div className="w-10 h-10 rounded-lg bg-primary-container text-on-primary flex items-center justify-center font-bold text-lg">KQ</div>
+            <div>
+              <span className="block text-lg font-bold text-primary">KisanQ</span>
+              <span className="block text-xs text-on-surface-variant">Digital Gate Token</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* WS connectivity indicator */}
+            <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-extrabold ${wsConnected ? 'bg-secondary-fixed text-on-secondary-fixed' : 'bg-tertiary-fixed text-on-tertiary-fixed'}`}>
+              <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-secondary animate-ping' : 'bg-tertiary-container'}`} />
+              {wsConnected ? 'Live' : 'Polling'}
+            </div>
+            <div className={`px-3 py-2 rounded-xl text-sm font-bold ${st.cls}`}>{st.label}</div>
+          </div>
+        </header>
+
+        {/* GATE PASS */}
+        <div className="bg-surface-container-lowest rounded-2xl shadow-xl overflow-hidden">
+          {/* Top banner */}
+          <div className="bg-gradient-to-r from-primary to-primary-container px-5 py-4 flex items-center justify-between">
+            <div>
+              <span className="text-on-primary/70 text-xs font-extrabold uppercase tracking-wider block">लासलगांव कृषि उपज मंडी</span>
+              <span className="text-on-primary text-xl font-bold block">डिजिटल गेट पास</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-on-primary material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+              <div className="text-right">
+                <span className="text-on-primary/70 text-xs block">Token ID</span>
+                <span className="text-on-primary font-extrabold text-lg tracking-wider">{tokenData.token}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Dashed divider */}
+          <div className="flex items-center justify-between px-4 py-2">
+            <div className="w-6 h-6 rounded-full bg-surface -ml-8 shadow-inner" />
+            <div className="flex-1 border-dashed border-t border-outline-variant mx-4" />
+            <div className="w-6 h-6 rounded-full bg-surface -mr-8 shadow-inner" />
+          </div>
+
+          {/* Token number big */}
+          <div className="px-5 pt-2 pb-4 flex items-center justify-between">
+            <div className="text-center">
+              <p className="text-xs font-extrabold text-on-surface-variant uppercase tracking-wider">टोकन क्रमांक</p>
+              <p className="text-6xl font-black text-primary leading-none">{tokenData.token.split('-')[1] || tokenData.token}</p>
+              <p className="text-xs text-on-surface-variant mt-1">{tokenData.token}</p>
+            </div>
+            {/* QR placeholder */}
+            <div className="w-28 h-28 bg-on-surface rounded-xl flex items-center justify-center overflow-hidden shadow-md">
+              <svg viewBox="0 0 100 100" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
+                {[0, 1, 2, 3, 4, 5, 6].map((r) =>
+                  [0, 1, 2, 3, 4, 5, 6].map((c) => {
+                    const p = [
+                      [0,0],[0,1],[0,2],[0,3],[0,4],[0,5],[0,6],
+                      [6,0],[6,1],[6,2],[6,3],[6,4],[6,5],[6,6],
+                      [1,0],[2,0],[3,0],[4,0],[5,0],[1,6],[2,6],[3,6],[4,6],[5,6],
+                      [0,6],[6,6],[2,2],[3,2],[4,2],[2,3],[3,3],[4,3],[2,4],[3,4],[4,4],
+                    ];
+                    const on = p.some(([pr, pc]) => pr === r && pc === c) || Math.random() > 0.55;
+                    return on ? (
+                      <rect key={`${r}-${c}`} x={c * 13 + 4} y={r * 13 + 4} width="11" height="11" fill="#faf8ff" />
+                    ) : null;
+                  })
+                )}
+              </svg>
+            </div>
+          </div>
+
+          {/* Farmer info */}
+          <div className="grid grid-cols-2 gap-2 mx-4 mb-4">
+            {[
+              ['किसान ID', tokenData.farmerId],
+              ['उपज', tokenData.crop],
+              ['मात्रा', tokenData.qty],
+              ['आगमन विंडो', tokenData.arrival],
+            ].map(([k, v]) => (
+              <div key={k} className="bg-surface-container-low rounded-xl p-3">
+                <span className="block text-xs text-on-surface-variant">{k}</span>
+                <span className="block text-sm font-bold text-on-surface leading-snug">{v}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Dashed divider */}
+          <div className="flex items-center justify-between px-4 mb-2">
+            <div className="w-6 h-6 rounded-full bg-surface -ml-8 shadow-inner" />
+            <div className="flex-1 border-dashed border-t border-outline-variant mx-4" />
+            <div className="w-6 h-6 rounded-full bg-surface -mr-8 shadow-inner" />
+          </div>
+
+          {/* Live queue status */}
+          <div className="px-4 pb-4 space-y-3">
+            <div className="flex items-center gap-3 bg-surface-container p-3 rounded-xl">
+              <div className="text-center min-w-[3.5rem] bg-primary-fixed rounded-lg p-2">
+                <span className="block text-3xl font-black text-primary leading-none">{tokenData.position}</span>
+                <span className="block text-[10px] text-on-primary-fixed-variant">कतार में</span>
+              </div>
+              <div className="flex-1">
+                <span className="block text-sm font-bold text-on-surface">आपकी कतार स्थिति</span>
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  {[...Array(Math.min(tokenData.position, 8))].map((_, i) => (
+                    <span
+                      key={i}
+                      className={`flex-1 h-2 rounded-full transition-all ${i < Math.max(0, tokenData.position - 3) ? 'bg-error' : 'bg-tertiary-fixed'}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Countdown */}
+            <div className="flex items-center justify-between bg-surface-container-low p-3 rounded-xl">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-tertiary text-xl">timer</span>
+                <span className="text-sm font-bold text-on-surface">अनुमानित प्रतीक्षा:</span>
+              </div>
+              <div className="text-right">
+                <span className="block text-xl font-black text-tertiary tabular-nums">{fmt(timer)}</span>
+                <span className="block text-xs text-on-surface-variant">मिनट शेष</span>
+              </div>
+            </div>
+
+            {/* Lane */}
+            <div className="bg-surface-container p-3 rounded-xl flex items-center gap-2">
+              <span className="material-symbols-outlined text-secondary text-xl">fork_right</span>
+              <div>
+                <span className="block text-xs text-on-surface-variant">निर्देशित मार्ग</span>
+                <span className="block text-sm font-bold text-on-surface">{tokenData.lane}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div className="grid grid-cols-2 gap-3">
+          <button onClick={() => navigate('/mandi-selection')} className="h-14 bg-surface-container-lowest rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 text-on-surface">
+            <span className="material-symbols-outlined text-xl text-primary">store</span>
+            <span className="text-xs font-bold">दूसरी मंडी</span>
+          </button>
+          <button onClick={shareToken} className="h-14 bg-secondary-fixed rounded-xl flex flex-col items-center justify-center gap-1 text-on-secondary-fixed">
+            <span className="material-symbols-outlined text-xl">share</span>
+            <span className="text-xs font-bold">टोकन शेयर करें</span>
+          </button>
+          <button onClick={printToken} className="h-14 bg-tertiary-fixed rounded-xl flex flex-col items-center justify-center gap-1 text-on-tertiary-fixed">
+            <span className="material-symbols-outlined text-xl">print</span>
+            <span className="text-xs font-bold">प्रिंट / PDF</span>
+          </button>
+          <button onClick={cancelToken} className="h-14 bg-surface-container-lowest rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 text-on-surface">
+            <span className="material-symbols-outlined text-xl text-error">cancel</span>
+            <span className="text-xs font-bold">रद्द करें</span>
+          </button>
+        </div>
+
+        {/* Help */}
+        <div className="bg-surface-container-low rounded-xl p-4 flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-10 h-10 rounded-full bg-surface-container-lowest text-primary flex items-center justify-center shadow-sm">
+              <span className="material-symbols-outlined text-lg">support_agent</span>
+            </div>
+            <div>
+              <span className="block text-xs text-on-surface-variant">किसान सहायता हेल्पलाइन (24x7)</span>
+              <span className="block text-sm font-bold text-on-surface">1800-180-1551 (Toll Free)</span>
+            </div>
+          </div>
+          <a href="tel:18001801551" className="h-10 px-4 bg-primary text-on-primary rounded-lg text-sm font-bold flex items-center gap-1 shadow-sm">
+            <span className="material-symbols-outlined text-base">call</span>
+            Call
+          </a>
+        </div>
+
+      </div>
+
+      {/* Bottom Nav */}
+      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-surface-container-lowest shadow-xl px-4 py-2 flex items-center justify-around z-50 rounded-t-2xl">
+        {[
+          ['storefront', 'मंडी', '/mandi-selection', false],
+          ['confirmation_number', 'मेरा टोकन', '/live-token', true],
+          ['traffic', 'कतार', '/live-token', false],
+          ['help_outline', 'सहायता', '/farmer-login', false],
+        ].map(([icon, label, path, active]) => (
+          <button key={label} onClick={() => navigate(path)} className={`flex flex-col items-center flex-1 py-1 ${active ? 'text-primary' : 'text-on-surface-variant'}`}>
+            <div className={active ? 'bg-primary-fixed px-3 py-1 rounded-full mb-0.5' : 'py-1 mb-0.5'}>
+              <span className="material-symbols-outlined text-xl" style={active ? { fontVariationSettings: "'FILL' 1" } : {}}>{icon}</span>
+            </div>
+            <span className="text-xs font-extrabold">{label}</span>
+          </button>
+        ))}
+      </nav>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/Login.jsx
+================================================================================
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import api from '../api';
+
+const LANGS = {
+  hi: {
+    title: 'किसान लॉगिन / Farmer Entry',
+    badge: 'SIH26032 • e-Mandi Gateway',
+    phoneHeader: 'अपना 10-अंकों का मोबाइल नंबर दर्ज करें',
+    phoneDesc: 'केवल पंजीकृत टोकन व भुगतान एसएमएस के लिए उपयोग होगा।',
+    privacy: 'शून्य डेटा संग्रह (No Aadhaar/Bank)',
+    btnSend: 'ओटीपी पाएं / Get OTP',
+    sending: 'कॉलिंग / Requesting...',
+    helpline: 'किसान सहायता केंद्र (24x7 Helpline)',
+    voiceMain: 'आवाज से सहायता लें',
+    voiceSub: 'सुनने के लिए माइक बटन दबाएं',
+  },
+  en: {
+    title: 'Farmer Login / Kisan Gateway',
+    badge: 'SIH26032 • e-Mandi Gateway',
+    phoneHeader: 'Enter 10-digit Mobile Number',
+    phoneDesc: 'Used strictly for Mandi token & arrival updates.',
+    privacy: 'Zero Data Collection (No Aadhaar/Bank)',
+    btnSend: 'Get OTP / Request Code',
+    sending: 'Requesting...',
+    helpline: 'Kisan Support Centre (24x7 Helpline)',
+    voiceMain: 'Voice Assistance',
+    voiceSub: 'Tap listen button for help',
+  },
+  mr: {
+    title: 'शेतकरी लॉगिन / Farmer Login',
+    badge: 'SIH26032 • e-Mandi Gateway',
+    phoneHeader: 'आपला 10-अंकी मोबाईल नंबर टाका',
+    phoneDesc: 'फक्त आवक टोकन व पेमेंट मेसेजसाठी वापरले जाईल.',
+    privacy: 'शून्य डेटा संकलन (No Aadhaar/Bank)',
+    btnSend: 'ओटीपी मिळवा / Get OTP',
+    sending: 'विनंती करत आहे...',
+    helpline: 'किसान सहाय्यता केंद्र (24x7)',
+    voiceMain: 'ध्वनी सहाय्य मिळवा',
+    voiceSub: 'ऐकण्यासाठी प्ले बटन दाबा',
+  },
+};
+
+export default function Login() {
+  const [lang, setLang] = useState('hi');
+  const [phone, setPhone] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const navigate = useNavigate();
+  const t = LANGS[lang];
+
+  const handleSendOtp = async () => {
+    if (phone.length !== 10) { setError('कृपया 10 अंकों का नंबर दर्ज करें।'); return; }
+    setError('');
+    setLoading(true);
+    try {
+      const { data } = await api.post('/auth/farmer/request-otp', { phone });
+      const devOtp = data?.data?.devOtp || '582490';
+      navigate('/otp-verify', { state: { phone, lang, devOtp } });
+    } catch (err) {
+      console.warn('Backend OTP request notice (demo mode fallback active):', err?.response?.data?.message || err?.message);
+      navigate('/otp-verify', { state: { phone, lang, devOtp: '582490' } });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-6 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Language Selector */}
+        <div className="flex items-center justify-between bg-surface-container-low px-3 py-2 rounded-full shadow-sm">
+          <div className="flex items-center gap-2 text-on-surface-variant text-xs font-bold uppercase tracking-wide">
+            <span className="material-symbols-outlined text-secondary text-lg">translate</span>
+            <span>भाषा / Language</span>
+          </div>
+          <div className="flex gap-1">
+            {['hi', 'en', 'mr'].map((l) => (
+              <button
+                key={l}
+                onClick={() => setLang(l)}
+                className={`px-3 py-1 rounded-full text-xs font-extrabold transition-colors ${lang === l ? 'bg-primary-container text-on-primary shadow-sm' : 'bg-surface-container-highest text-on-surface'}`}
+              >
+                {l === 'hi' ? 'हिन्दी' : l === 'en' ? 'English' : 'मराठी'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Trust Banner */}
+        <div className="flex items-center justify-between bg-surface-container-lowest p-3 rounded-xl shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-primary-fixed flex items-center justify-center text-on-primary-fixed">
+              <span className="material-symbols-outlined text-lg" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+            </div>
+            <div>
+              <span className="block text-xs font-extrabold text-secondary uppercase tracking-wider">{t.badge}</span>
+              <span className="block text-base font-bold text-on-surface leading-tight">{t.title}</span>
+            </div>
+          </div>
+          <span className="px-2 py-1 rounded-full bg-primary-fixed text-on-primary-fixed-variant text-xs font-extrabold">Govt Mandi</span>
+        </div>
+
+        {/* Main Card */}
+        <div className="bg-surface-container-lowest rounded-xl shadow-md p-4 flex flex-col gap-4">
+
+          {/* Voice Guidance */}
+          <div className="flex items-center justify-between bg-surface-container-low px-3 py-2 rounded-xl">
+            <div className="flex items-center gap-3">
+              <div className="w-7 h-7 rounded-full bg-secondary-fixed text-on-secondary-fixed flex items-center justify-center">
+                <span className="material-symbols-outlined text-base animate-pulse">volume_up</span>
+              </div>
+              <div>
+                <span className="block text-sm font-bold text-on-surface">{t.voiceMain}</span>
+                <span className="block text-xs text-on-surface-variant">{t.voiceSub}</span>
+              </div>
+            </div>
+            <button className="h-10 px-3 bg-surface-container-highest text-on-surface rounded-lg text-sm font-bold flex items-center gap-1 shadow-sm">
+              <span className="material-symbols-outlined text-lg text-secondary">play_circle</span>
+              <span>सुनें</span>
+            </button>
+          </div>
+
+          {/* Phone input */}
+          <div>
+            <label className="block text-lg font-extrabold text-on-surface mb-1">{t.phoneHeader}</label>
+            <p className="text-sm text-on-surface-variant mb-3">{t.phoneDesc}</p>
+
+            <div className="relative flex items-stretch rounded-xl shadow-sm bg-surface-container-lowest focus-within:ring-2 focus-within:ring-primary-container">
+              {/* India flag + +91 */}
+              <div className="flex items-center gap-1.5 px-3 bg-surface-container-high rounded-l-xl text-on-surface">
+                <div className="w-5 h-3.5 rounded-sm overflow-hidden flex flex-col shadow-inner">
+                  <span className="h-1/3 bg-[#FF9933] w-full block" />
+                  <span className="h-1/3 bg-white w-full flex items-center justify-center">
+                    <span className="w-1 h-1 rounded-full bg-[#000080] block" />
+                  </span>
+                  <span className="h-1/3 bg-[#128807] w-full block" />
+                </div>
+                <span className="text-lg font-bold text-on-surface">+91</span>
+              </div>
+              <input
+                className="w-full h-14 px-3 text-xl font-bold text-on-surface placeholder:text-outline-variant tracking-wider bg-transparent outline-none"
+                type="tel"
+                maxLength={10}
+                placeholder="98765 43210"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+              />
+            </div>
+
+            <div className="flex items-center justify-between text-xs text-on-surface-variant px-1 pt-1">
+              <span className="flex items-center gap-1">
+                <span className="material-symbols-outlined text-sm text-secondary">lock</span>
+                {t.privacy}
+              </span>
+              <span className="font-mono text-outline">POST /farmer/request-otp</span>
+            </div>
+          </div>
+
+          {error && <p className="text-sm text-error bg-error-container px-3 py-2 rounded-lg">{error}</p>}
+
+          <button
+            className="btn-primary"
+            onClick={handleSendOtp}
+            disabled={loading}
+          >
+            {loading
+              ? <><span className="material-symbols-outlined animate-spin text-lg">progress_activity</span><span>{t.sending}</span></>
+              : <><span className="material-symbols-outlined text-lg">sms</span><span>{t.btnSend}</span></>
+            }
+          </button>
+        </div>
+
+        {/* Helpline */}
+        <div className="bg-surface-container-low rounded-xl p-4 space-y-2 shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-bold text-on-surface flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-secondary">support_agent</span>
+              {t.helpline}
+            </span>
+            <span className="px-2 py-0.5 rounded bg-surface-container-high text-on-surface text-xs font-extrabold">Toll-Free</span>
+          </div>
+          <a href="tel:18001801551"
+            className="w-full h-12 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-bold flex items-center justify-center gap-2 shadow-sm"
+          >
+            <span className="material-symbols-outlined text-primary text-lg">call</span>
+            <span className="text-primary font-black tracking-wider">1800-180-1551</span>
+            <span className="text-on-surface-variant text-xs">(किसान कॉल सेंटर)</span>
+          </a>
+        </div>
+
+      </div>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/MandiSelection.jsx
+================================================================================
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import api from '../api';
+
+const STATUS_CONFIG = {
+  green: { label: '🟢 सुचारु / Green', cls: 'bg-primary-fixed text-on-primary-fixed', dot: 'bg-secondary animate-pulse' },
+  amber: { label: '🟡 मध्यम / Amber', cls: 'bg-tertiary-fixed text-on-tertiary-fixed', dot: 'bg-tertiary-container' },
+  red:   { label: '🔴 व्यस्त / Red',   cls: 'bg-error-container text-on-error-container', dot: 'bg-error animate-pulse' },
+};
+
+const SEED_MANDIS = [
+  {
+    _id: '65f1a2b3c4d5e6f7a8b9c0d1', name: 'लासलगांव कृषि उपज मंडी', sub: 'Lasalgaon APMC Market Yard',
+    tag: 'एशिया की सबसे बड़ी मंडी', status: 'green', wait: '15-20 मिनट', dist: '8.5', time: '20',
+    slots: 42, queue: 14, crops: 'प्याज, गेहूं, मक्का', search: 'lasalgaon 422306'
+  },
+  {
+    _id: '65f1a2b3c4d5e6f7a8b9c0d2', name: 'पिंपलगांव बसवंत मंडी', sub: 'Pimpalgaon Baswant APMC',
+    tag: 'प्रमुख टमाटर मंडी', status: 'amber', wait: '45-60 मिनट', dist: '14.2', time: '35',
+    slots: 18, queue: 38, crops: 'टमाटर, अंगूर, सोयाबीन', search: 'pimpalgaon 422209'
+  },
+  {
+    _id: '65f1a2b3c4d5e6f7a8b9c0d3', name: 'नासिक मुख्य मंडी (पंचवटी)', sub: 'Nashik Main APMC Yard',
+    tag: 'भारी भीड़ / High Rush', status: 'red', wait: '90+ मिनट', dist: '22.0', time: '50',
+    slots: 6, queue: 72, crops: 'गेहूं, मक्का, सोयाबीन', search: 'nashik 422003'
+  },
+  {
+    _id: '65f1a2b3c4d5e6f7a8b9c0d4', name: 'निफाड उप-मंडी केंद्र', sub: 'Niphad Sub-Mandi Yard',
+    tag: 'त्वरित तौल सुविधा', status: 'green', wait: '10-15 मिनट', dist: '19.5', time: '40',
+    slots: 55, queue: 6, crops: 'प्याज, गेहूं, मक्का', search: 'niphad 422303'
+  },
+];
+
+export default function MandiSelection() {
+  const navigate = useNavigate();
+  const [mandis, setMandis] = useState(SEED_MANDIS);
+  const [filter, setFilter] = useState('all');
+  const [query, setQuery] = useState('');
+  const [audioToast, setAudioToast] = useState(false);
+
+  const showAudioGuide = () => {
+    setAudioToast(true);
+    setTimeout(() => setAudioToast(false), 3000);
+  };
+
+  useEffect(() => {
+    api.get('/centres').then(({ data }) => {
+      if (data?.data?.length) setMandis(data.data);
+    }).catch(() => {});
+  }, []);
+
+  const visible = mandis.filter((m) => {
+    const matchFilter = filter === 'all' || m.status === filter;
+    const matchSearch = !query || m.name.toLowerCase().includes(query.toLowerCase()) || (m.search || '').includes(query.toLowerCase());
+    return matchFilter && matchSearch;
+  });
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-28 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Brand bar */}
+        <div className="flex items-center justify-between bg-surface-container-lowest p-3 rounded-xl shadow-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-10 h-10 rounded-lg bg-primary-container text-on-primary flex items-center justify-center font-bold text-lg">KQ</div>
+            <div>
+              <span className="block text-lg font-bold text-primary leading-tight">KisanQ</span>
+              <span className="block text-xs font-extrabold text-secondary uppercase tracking-wider">डिजिटल मंडी टोकन</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center bg-surface-container-low px-3 py-1 rounded-full text-primary text-xs font-bold">
+              <span className="material-symbols-outlined text-sm mr-1">translate</span>
+              हिन्दी
+            </div>
+            <button className="w-11 h-11 bg-primary-fixed text-on-primary-fixed rounded-xl flex items-center justify-center" onClick={showAudioGuide}>
+              <span className="material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>volume_up</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Audio guide toast */}
+        {audioToast && (
+          <div className="flex items-center gap-3 bg-secondary-fixed text-on-secondary-fixed px-4 py-3 rounded-xl shadow-md animate-bounce">
+            <span className="material-symbols-outlined text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>volume_up</span>
+            <span className="text-sm font-bold">ऑडियो गाइड: लासलगांव मंडी में अभी सबसे कम प्रतीक्षा समय है।</span>
+          </div>
+        )}
+
+        {/* Location bar */}
+        <div className="flex items-center justify-between bg-surface-container-low px-4 py-3 rounded-xl">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>location_on</span>
+            <div>
+              <p className="text-sm font-bold text-on-surface">📍 नासिक ज़िला / Nashik District</p>
+              <p className="text-xs text-on-surface-variant">महाराष्ट्र • {mandis.length} पंजीकृत मंडियां</p>
+            </div>
+          </div>
+          <button className="text-sm font-bold text-primary bg-surface-container-lowest px-3 py-1.5 rounded-lg">बदलें</button>
+        </div>
+
+        {/* Search */}
+        <div className="relative flex items-center w-full">
+          <span className="material-symbols-outlined absolute left-4 text-on-surface-variant text-2xl pointer-events-none">search</span>
+          <input
+            className="w-full h-14 pl-12 pr-14 bg-surface-container-lowest rounded-xl text-sm text-on-surface placeholder:text-outline focus:outline-none focus:bg-surface-container-low shadow-sm"
+            placeholder="मंडी का नाम या पिनकोड खोजें / Search APMC..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <button className="absolute right-2 w-11 h-11 bg-secondary-fixed text-on-secondary-fixed rounded-lg flex items-center justify-center">
+            <span className="material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>mic</span>
+          </button>
+        </div>
+
+        {/* Filter tabs */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-bold text-on-surface">कतार स्थिति फ़िल्टर</span>
+            <span className="flex items-center text-xs font-extrabold text-secondary">
+              <span className="w-2 h-2 rounded-full bg-secondary mr-1 animate-ping" />
+              लाइव अपडेट
+            </span>
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            {[['all', `सभी (${mandis.length})`], ['green', 'सुचारु 🟢'], ['amber', 'मध्यम 🟡'], ['red', 'व्यस्त 🔴']].map(([f, label]) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`filter-chip ${filter === f ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface'}`}
+              >{label}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Legend */}
+        <div className="bg-surface-container p-3 rounded-xl space-y-1.5 shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-extrabold text-on-surface uppercase tracking-wide">कतार संकेत / Wait Times Guide</span>
+            <span className="text-xs text-on-surface-variant">अभी-अभी</span>
+          </div>
+          <div className="grid grid-cols-3 gap-1.5 text-center">
+            {[
+              ['bg-primary-fixed text-on-primary-fixed', '🟢 0-20 मिनट', 'कम भीड़ / Fast'],
+              ['bg-tertiary-fixed text-on-tertiary-fixed', '🟡 30-60 मिनट', 'मध्यम / Normal'],
+              ['bg-error-container text-on-error-container', '🔴 90+ मिनट', 'Rush'],
+            ].map(([cls, top, bot]) => (
+              <div key={top} className={`${cls} px-2 py-1 rounded-lg`}>
+                <p className="text-xs font-extrabold">{top}</p>
+                <p className="text-[10px] leading-tight">{bot}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Mandi cards */}
+        <div className="flex flex-col gap-4">
+          {visible.map((m) => {
+            const st = STATUS_CONFIG[m.status] || STATUS_CONFIG.green;
+            return (
+              <div key={m._id} className="mandi-card">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1 text-xs font-extrabold text-secondary uppercase tracking-wider mb-1">
+                      <span className="material-symbols-outlined text-base">store</span>
+                      {m.tag}
+                    </div>
+                    <h2 className="text-lg font-bold text-on-surface leading-snug">{m.name}</h2>
+                    <p className="text-sm text-on-surface-variant">{m.sub}</p>
+                  </div>
+                  <div className={`flex-shrink-0 ${st.cls} px-2.5 py-1.5 rounded-lg text-right`}>
+                    <div className="flex items-center gap-1">
+                      <span className={`w-2.5 h-2.5 rounded-full ${st.dot}`} />
+                      <span className="text-xs font-extrabold">{st.label}</span>
+                    </div>
+                    <span className="text-[11px] block mt-0.5">प्रतीक्षा: {m.wait}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 bg-surface-container-low px-3 py-2 rounded-lg">
+                  <div className="flex items-center gap-1"><span className="material-symbols-outlined text-primary text-base">near_me</span><span className="text-sm font-bold">{m.dist} किमी</span></div>
+                  <span className="text-outline text-xs">•</span>
+                  <div className="flex items-center gap-1"><span className="material-symbols-outlined text-primary text-base">schedule</span><span className="text-sm">{m.time} मिनट की दूरी</span></div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-surface-container-low p-2 rounded-lg">
+                    <span className="text-xs text-on-surface-variant block">उपलब्ध टोकन आज</span>
+                    <span className={`text-lg font-bold ${m.status === 'green' ? 'text-secondary' : m.status === 'amber' ? 'text-tertiary' : 'text-error'}`}>{m.slots} स्लॉट बाकी</span>
+                  </div>
+                  <div className="bg-surface-container-low p-2 rounded-lg">
+                    <span className="text-xs text-on-surface-variant block">वर्तमान कतार</span>
+                    <span className="text-lg font-bold text-on-surface">{m.queue} ट्रॉलियां</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 text-on-surface-variant text-sm">
+                  <span className="material-symbols-outlined text-base">psychiatry</span>
+                  <span>मुख्य उपज: <b>{m.crops}</b></span>
+                </div>
+
+                {m.status === 'red'
+                  ? <button className="w-full h-14 bg-surface-container-high text-on-surface rounded-xl text-sm font-bold flex items-center justify-center gap-2">
+                      <span className="material-symbols-outlined text-xl">event</span>
+                      कल के लिए बुक करें / Book for Tomorrow
+                    </button>
+                  : <button
+                      className="w-full h-14 bg-primary text-on-primary rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-md"
+                      onClick={() => navigate('/book-slot', { state: { centre: m } })}
+                    >
+                      <span>स्लॉट बुक करें / Book Slot</span>
+                      <span className="material-symbols-outlined text-xl">arrow_forward</span>
+                    </button>
+                }
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Privacy footer */}
+        <div className="bg-surface-container-low p-4 rounded-xl space-y-2">
+          <div className="flex items-center gap-2 text-secondary">
+            <span className="material-symbols-outlined text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>verified_user</span>
+            <span className="text-sm font-bold text-on-surface">सुरक्षित एवं सरल किसान सेवा</span>
+          </div>
+          <p className="text-xs text-on-surface-variant">✓ कोई आधार कार्ड या बैंक खाता विवरण आवश्यक नहीं है।</p>
+          <div className="flex items-center justify-between pt-2 border-t border-outline-variant/30">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-primary text-lg">support_agent</span>
+              <span className="text-sm text-on-surface">किसान सहायता हेल्पलाइन (24x7):</span>
+            </div>
+            <a href="tel:18001801551" className="text-sm font-bold text-primary">1800-180-1551</a>
+          </div>
+        </div>
+
+      </div>
+
+      {/* Bottom Nav */}
+      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-surface-container-lowest shadow-xl px-4 py-2 flex items-center justify-around z-50 rounded-t-2xl">
+        {[
+          ['storefront', 'मंडी केंद्र', '/mandi-selection', true],
+          ['confirmation_number', 'मेरे टोकन', '/live-token', false],
+          ['traffic', 'कतार', '/live-token', false],
+          ['help_outline', 'सहायता', '/', false],
+        ].map(([icon, label, path, active]) => (
+          <button key={label} onClick={() => navigate(path)} className={`flex flex-col items-center flex-1 py-1 ${active ? 'text-primary' : 'text-on-surface-variant'}`}>
+            <div className={active ? 'bg-primary-fixed px-3 py-1 rounded-full mb-0.5' : 'py-1 mb-0.5'}>
+              <span className="material-symbols-outlined text-xl" style={active ? { fontVariationSettings: "'FILL' 1" } : {}}>{icon}</span>
+            </div>
+            <span className="text-xs font-extrabold">{label}</span>
+          </button>
+        ))}
+      </nav>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/NotFound.jsx
+================================================================================
+import { useNavigate } from 'react-router-dom';
+
+export default function NotFound() {
+  const navigate = useNavigate();
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface items-center justify-center px-4 font-jakarta text-center">
+      <div className="w-full max-w-md bg-surface-container-lowest rounded-3xl p-8 shadow-xl space-y-6">
+        <div className="w-20 h-20 rounded-2xl bg-error-container text-on-error-container mx-auto flex items-center justify-center shadow-inner">
+          <span className="material-symbols-outlined text-4xl">travel_explore</span>
+        </div>
+        <div className="space-y-2">
+          <span className="text-xs font-extrabold text-error uppercase tracking-widest block">ERROR 404 • PAGE NOT FOUND</span>
+          <h1 className="text-2xl font-black text-on-surface">पृष्ठ नहीं मिला / Page Not Found</h1>
+          <p className="text-sm text-on-surface-variant leading-relaxed">
+            आप जिस पृष्ठ की तलाश कर रहे हैं वह मौजूद नहीं है या स्थानांतरित कर दिया गया है।
+          </p>
+        </div>
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={() => navigate('/')}
+            className="w-full h-14 bg-primary text-on-primary rounded-xl font-bold text-sm shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all"
+          >
+            <span className="material-symbols-outlined text-xl">home</span>
+            मुख्य द्वार पर जाएं / Go to Main Gateway
+          </button>
+          <button
+            onClick={() => navigate(-1)}
+            className="w-full h-12 bg-surface-container text-on-surface rounded-xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-all"
+          >
+            <span className="material-symbols-outlined text-xl">arrow_back</span>
+            पीछे जाएं / Go Back
+          </button>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/OTPVerify.jsx
+================================================================================
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import api from '../api';
+
+export default function OTPVerify() {
+  const navigate = useNavigate();
+  const { state } = useLocation();
+  const phone = state?.phone || '';
+  const devOtp = state?.devOtp || state?.mockOtp || '';
+  // Pre-split devOtp into 6 digit slots; pads with empty string if shorter
+  const initialDigits = Array.from({ length: 6 }, (_, i) => devOtp[i] || '');
+  const [otp, setOtp] = useState(initialDigits);
+  const [timer, setTimer] = useState(48);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const inputRefs = useRef([]);
+
+  // Start countdown timer
+  useEffect(() => {
+    const id = setInterval(() => setTimer((t) => (t > 0 ? t - 1 : 0)), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Auto-focus the last filled digit when devOtp is pre-loaded
+  useEffect(() => {
+    if (devOtp && inputRefs.current[5]) {
+      inputRefs.current[5].focus();
+    }
+  }, [devOtp]);
+
+  const handleChange = (idx, val) => {
+    if (!/^\d?$/.test(val)) return;
+    const next = [...otp];
+    next[idx] = val;
+    setOtp(next);
+    if (val && idx < 5) inputRefs.current[idx + 1]?.focus();
+  };
+
+  const handleKeyDown = (idx, e) => {
+    if (e.key === 'Backspace' && !otp[idx] && idx > 0) {
+      inputRefs.current[idx - 1]?.focus();
+    }
+  };
+
+  const autoFill = () => {
+    const filled = devOtp ? Array.from({ length: 6 }, (_, i) => devOtp[i] || '') : ['5', '8', '2', '4', '9', '0'];
+    setOtp(filled);
+    inputRefs.current[5]?.focus();
+  };
+
+  const handleVerify = async () => {
+    const code = otp.join('');
+    if (code.length < 6) { setError('कृपया 6-अंकों का ओटीपी दर्ज करें।'); return; }
+    setError(''); setLoading(true);
+    try {
+      const { data } = await api.post('/auth/farmer/verify-otp', { phone, otp: code });
+      if (data?.data?.token) {
+        localStorage.setItem('kq_token', data.data.token);
+        if (data?.data?.user) {
+          localStorage.setItem('kq_user', JSON.stringify(data.data.user));
+        }
+      }
+      navigate('/mandi-selection');
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.message || 'ओटीपी सत्यापन विफल हुआ।';
+      console.warn('OTP verification notice (demo fallback active):', msg);
+      localStorage.setItem('kq_token', 'mock_token');
+      navigate('/mandi-selection');
+    } finally { setLoading(false); }
+  };
+
+  const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-6 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Progress stepper */}
+        <div className="bg-surface-container-low rounded-xl p-3 shadow-sm">
+          <div className="flex items-center justify-between relative">
+            <div className="flex items-center gap-2 z-10">
+              <div className="w-7 h-7 rounded-full bg-secondary text-on-secondary flex items-center justify-center text-xs shadow-sm">
+                <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>check</span>
+              </div>
+              <div>
+                <span className="block text-xs font-extrabold text-secondary uppercase">चरण 1</span>
+                <span className="block text-sm font-bold text-on-surface">मोबाइल नंबर</span>
+              </div>
+            </div>
+            <div className="h-0.5 flex-1 bg-secondary-fixed-dim mx-3" />
+            <div className="flex items-center gap-2 z-10">
+              <div className="w-7 h-7 rounded-full bg-primary-container text-on-primary flex items-center justify-center text-xs font-bold shadow-sm animate-pulse">2</div>
+              <div className="text-right">
+                <span className="block text-xs font-extrabold text-primary-container uppercase">चरण 2</span>
+                <span className="block text-sm font-extrabold text-primary-container">ओटीपी सत्यापन</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Phone shown */}
+          <div className="mt-3 bg-surface-container-lowest rounded-lg px-3 py-2 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center text-primary">
+                <span className="material-symbols-outlined text-lg">smartphone</span>
+              </div>
+              <div>
+                <span className="block text-xs text-on-surface-variant">ओटीपी भेजा गया:</span>
+                <span className="block text-sm font-bold text-on-surface tracking-wide">+91 {phone}</span>
+              </div>
+            </div>
+            <button onClick={() => navigate('/')} className="h-10 px-3 bg-surface-container-high text-primary rounded-lg flex items-center gap-1 text-sm font-bold">
+              <span className="material-symbols-outlined text-base">edit</span>
+              बदलें
+            </button>
+          </div>
+        </div>
+
+        {/* SMS auto-fill banner */}
+        <div className="w-full bg-secondary-fixed text-on-secondary-fixed rounded-xl p-3 flex items-center justify-between shadow-sm cursor-pointer" onClick={autoFill}>
+          <div className="flex items-center gap-3">
+            <span className="material-symbols-outlined text-lg text-on-secondary-container animate-bounce">mark_chat_unread</span>
+            <div>
+              <span className="block text-xs font-extrabold text-on-secondary-container">SMS से संदेश मिला • Just now</span>
+              <span className="block text-sm font-bold text-on-secondary-fixed">OTP 582490 पहचाना गया</span>
+            </div>
+          </div>
+          <button className="h-9 px-3 bg-surface-container-lowest text-secondary text-sm font-bold rounded-lg shadow-sm flex items-center gap-1">
+            <span>भरें (Paste)</span>
+            <span className="material-symbols-outlined text-sm">arrow_forward</span>
+          </button>
+        </div>
+
+        {/* OTP Input Box */}
+        <div className="bg-surface-container-lowest rounded-xl p-4 shadow-md flex flex-col items-center gap-4">
+          <div className="flex items-center justify-between w-full">
+            <label className="text-lg font-extrabold text-on-surface">6-अंकों का ओटीपी दर्ज करें</label>
+            <span className="text-xs font-extrabold text-secondary bg-surface-container-low px-2 py-1 rounded-full">6 DIGITS</span>
+          </div>
+          <p className="text-sm text-on-surface-variant w-full">Enter the 6-digit code received on your mobile phone</p>
+
+          <div className="grid grid-cols-6 gap-2 w-full max-w-sm">
+            {otp.map((d, i) => (
+              <input
+                key={i}
+                ref={(el) => (inputRefs.current[i] = el)}
+                className="otp-box"
+                type="text"
+                inputMode="numeric"
+                maxLength={1}
+                value={d}
+                placeholder="•"
+                onChange={(e) => handleChange(i, e.target.value)}
+                onKeyDown={(e) => handleKeyDown(i, e)}
+              />
+            ))}
+          </div>
+
+          {/* Timer */}
+          <div className="w-full bg-surface-container-low rounded-xl p-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-lg text-tertiary-container">schedule</span>
+              <span className="text-sm text-on-surface">पुनः ओटीपी भेजें:</span>
+            </div>
+            <div className="px-3 py-1 rounded-full bg-surface-container-high text-tertiary text-sm font-bold flex items-center gap-1">
+              <span>{fmt(timer)}</span>
+              <span className="text-on-surface-variant text-xs">सेकंड</span>
+            </div>
+          </div>
+
+          {/* Resend options */}
+          <div className="grid grid-cols-2 gap-2 w-full">
+            <button disabled={timer > 0} className="h-12 bg-surface-container text-on-surface-variant rounded-xl flex items-center justify-center gap-1 text-sm font-bold disabled:opacity-50">
+              <span className="material-symbols-outlined text-base">sync</span>
+              एसएमएस (SMS)
+            </button>
+            <button className="h-12 bg-surface-container text-tertiary rounded-xl flex items-center justify-center gap-1 text-sm font-bold">
+              <span className="material-symbols-outlined text-base">phone_in_talk</span>
+              कॉल पर पाएं
+            </button>
+          </div>
+        </div>
+
+        {error && <p className="text-sm text-error bg-error-container px-3 py-2 rounded-lg">{error}</p>}
+
+        {/* Verify CTA */}
+        <button className="btn-primary" onClick={handleVerify} disabled={loading}>
+          {loading
+            ? <><span className="material-symbols-outlined animate-spin text-lg">autorenew</span><span>सत्यापित हो रहा है...</span></>
+            : <><span className="material-symbols-outlined text-lg" style={{ fontVariationSettings: "'FILL' 1" }}>verified_user</span><span>सत्यापित करें और आगे बढ़ें / Verify & Proceed</span></>
+          }
+        </button>
+
+        {/* Privacy badge */}
+        <div className="w-full bg-surface-container-low rounded-xl p-3 flex items-start gap-3 shadow-sm">
+          <span className="material-symbols-outlined text-lg text-secondary shrink-0 mt-0.5" style={{ fontVariationSettings: "'FILL' 1" }}>gshield</span>
+          <div>
+            <span className="block text-sm font-bold text-on-surface">सुरक्षित प्रमाणीकरण • केवल टोकन जारी करने हेतु</span>
+            <span className="block text-xs text-on-surface-variant">No Aadhaar card or Bank account details required for Mandi Gate Entry Token.</span>
+          </div>
+        </div>
+
+        {/* Helpline */}
+        <div className="bg-surface-container rounded-xl p-3 flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-10 h-10 rounded-full bg-surface-container-lowest text-primary flex items-center justify-center shadow-sm">
+              <span className="material-symbols-outlined text-lg">support_agent</span>
+            </div>
+            <div>
+              <span className="block text-xs font-extrabold text-on-surface-variant uppercase">मंडी किसान सहायता • 24x7</span>
+              <span className="block text-sm font-bold text-on-surface">1800-180-1551 (Toll Free)</span>
+            </div>
+          </div>
+          <a href="tel:18001801551" className="h-10 px-3 bg-surface-container-lowest text-primary rounded-lg flex items-center gap-1 text-sm font-bold shadow-sm">
+            <span className="material-symbols-outlined text-base text-secondary">call</span>
+            कॉल करें
+          </a>
+        </div>
+
+      </div>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/PaymentCheckout.jsx
+================================================================================
+import { useState } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import api from '../api';
+
+export default function PaymentCheckout() {
+  const navigate = useNavigate();
+  const { state } = useLocation();
+  const lot   = state?.lot  || { token: 'KQ-108', farmer: 'रामचंद्र पाटील', crop: '🧅 प्याज', qty: 48.5 };
+  const bid   = state?.bid  || 3150;
+  const grade = state?.grade || 'A';
+  const gradeQty = lot.gradeBreakdown?.find(g => g.g === grade)?.qty || lot.qty;
+  const gross = (bid * gradeQty).toFixed(2);
+  const commission = (gross * 0.015).toFixed(2);  // 1.5% mandi tax
+  const transport  = 250;
+  const weighing   = 50;
+  const net  = (gross - commission - transport - weighing).toFixed(2);
+
+  const [method, setMethod] = useState('upi');
+  const [upiId, setUpiId] = useState('9876543210@okaxis');
+  const [loading, setLoading] = useState(false);
+  const [paid, setPaid] = useState(false);
+
+  const handlePay = async () => {
+    setLoading(true);
+    try {
+      await api.post('/payments', { bookingId: lot._id, amount: Number(net), method, upiId });
+    } catch {}
+    setTimeout(() => { setLoading(false); setPaid(true); }, 1800);
+  };
+
+  if (paid) return (
+    <main className="flex flex-col min-h-screen bg-surface items-center justify-center px-4 font-jakarta">
+      <div className="w-full max-w-md flex flex-col items-center gap-6 text-center">
+        <div className="w-24 h-24 rounded-full bg-secondary-fixed flex items-center justify-center shadow-xl">
+          <span className="material-symbols-outlined text-5xl text-on-secondary-fixed" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+        </div>
+        <div>
+          <h1 className="text-2xl font-black text-primary">भुगतान सफल!</h1>
+          <p className="text-sm text-on-surface-variant mt-1">Payment Successful</p>
+        </div>
+        <div className="bg-surface-container-lowest rounded-2xl p-6 w-full shadow-md text-left space-y-2">
+          <div className="flex justify-between"><span className="text-sm text-on-surface-variant">किसान</span><span className="text-sm font-bold">{lot.farmer}</span></div>
+          <div className="flex justify-between"><span className="text-sm text-on-surface-variant">टोकन</span><span className="text-sm font-bold">{lot.token}</span></div>
+          <div className="flex justify-between"><span className="text-sm text-on-surface-variant">उपज</span><span className="text-sm font-bold">{lot.crop}</span></div>
+          <div className="h-px bg-outline-variant my-2" />
+          <div className="flex justify-between"><span className="text-lg font-extrabold text-on-surface">शुद्ध भुगतान</span><span className="text-lg font-extrabold text-secondary">₹{Number(net).toLocaleString('hi-IN')}</span></div>
+        </div>
+        <button onClick={() => navigate('/mandi-selection')} className="btn-primary">
+          <span className="material-symbols-outlined">storefront</span>
+          <span>मंडी में वापस जाएं</span>
+        </button>
+      </div>
+    </main>
+  );
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-4 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Header */}
+        <header className="flex items-center justify-between py-1">
+          <div className="flex items-center gap-2">
+            <div className="w-10 h-10 rounded-lg bg-primary-container text-on-primary flex items-center justify-center font-bold text-lg">KQ</div>
+            <div>
+              <span className="block text-lg font-bold text-primary">KisanQ</span>
+              <span className="block text-xs text-on-surface-variant">Payment & Settlement</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 bg-secondary-fixed text-on-secondary-fixed px-3 py-1.5 rounded-full text-xs font-extrabold">
+            <span className="material-symbols-outlined text-base" style={{ fontVariationSettings: "'FILL' 1" }}>lock</span>
+            Secure Checkout
+          </div>
+        </header>
+
+        {/* Sale summary */}
+        <section className="bg-surface-container-lowest rounded-xl shadow-md p-4">
+          <h2 className="text-sm font-extrabold text-on-surface-variant uppercase mb-3">विक्रय सारांश / Sale Summary</h2>
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-14 h-14 rounded-xl bg-secondary-container flex items-center justify-center text-3xl">🧅</div>
+            <div>
+              <span className="block text-xl font-bold text-on-surface">{lot.crop}</span>
+              <span className="block text-sm text-on-surface-variant">ग्रेड {grade} • {gradeQty} क्विंटल • {lot.token}</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {[
+              ['बोली दर (Hammer Rate)', `₹${bid.toLocaleString('hi-IN')}/क्विंटल`],
+              ['कुल वजन', `${gradeQty} क्विंटल`],
+              ['सकल राशि (Gross)', `₹${Number(gross).toLocaleString('hi-IN')}`],
+            ].map(([k, v]) => (
+              <div key={k} className="flex justify-between"><span className="text-sm text-on-surface-variant">{k}</span><span className="text-sm font-bold text-on-surface">{v}</span></div>
+            ))}
+            <div className="h-px bg-outline-variant/40 my-1" />
+            <div className="flex justify-between"><span className="text-sm text-on-surface-variant">मंडी कर (1.5%)</span><span className="text-sm font-bold text-error">- ₹{Number(commission).toLocaleString('hi-IN')}</span></div>
+            <div className="flex justify-between"><span className="text-sm text-on-surface-variant">ढुलाई / Transport</span><span className="text-sm font-bold text-error">- ₹{transport}</span></div>
+            <div className="flex justify-between"><span className="text-sm text-on-surface-variant">तौल शुल्क / Weighing</span><span className="text-sm font-bold text-error">- ₹{weighing}</span></div>
+            <div className="h-px bg-outline-variant/40 my-1" />
+            <div className="flex justify-between bg-primary-fixed rounded-xl px-3 py-3">
+              <span className="text-lg font-extrabold text-on-primary-fixed">शुद्ध भुगतान (Net)</span>
+              <span className="text-xl font-black text-primary">₹{Number(net).toLocaleString('hi-IN')}</span>
+            </div>
+          </div>
+        </section>
+
+        {/* Payment method */}
+        <section className="bg-surface-container-lowest rounded-xl shadow-sm p-4">
+          <h2 className="text-sm font-extrabold text-on-surface-variant uppercase mb-3">भुगतान विधि / Payment Method</h2>
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            {[['upi', '📱 UPI'], ['neft', '🏦 NEFT'], ['cash', '💵 Cash']].map(([m, label]) => (
+              <button key={m} onClick={() => setMethod(m)}
+                className={`h-14 rounded-xl text-sm font-bold ${method === m ? 'bg-primary text-on-primary shadow-md' : 'bg-surface-container text-on-surface'}`}
+              >{label}</button>
+            ))}
+          </div>
+
+          {method === 'upi' && (
+            <div>
+              <div className="flex items-center gap-2 bg-surface-container-low px-3 py-2 rounded-xl mb-3">
+                <span className="material-symbols-outlined text-secondary text-xl">account_balance_wallet</span>
+                <input
+                  className="flex-1 text-sm font-bold text-on-surface bg-transparent outline-none"
+                  placeholder="UPI ID (e.g. 9876543210@okaxis)"
+                  value={upiId}
+                  onChange={(e) => setUpiId(e.target.value)}
+                />
+              </div>
+              <div className="bg-secondary-fixed/30 rounded-xl p-3 flex items-start gap-2">
+                <span className="material-symbols-outlined text-secondary text-xl shrink-0">info</span>
+                <div>
+                  <span className="block text-sm font-bold text-on-surface">No Aadhaar / Bank Account Number required</span>
+                  <span className="block text-xs text-on-surface-variant mt-0.5">मंडी केवल UPI ID या NEFT Account Number का उपयोग करती है। आधार कार्ड नहीं मांगा जाएगा।</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {method === 'neft' && (
+            <div className="space-y-2">
+              {[['बैंक का नाम / Bank', 'State Bank of India'], ['खाता नं. (Account)', '****8542 (Masked)'], ['IFSC', 'SBIN0000123']].map(([k, v]) => (
+                <div key={k} className="flex justify-between bg-surface-container-low px-3 py-2 rounded-lg">
+                  <span className="text-sm text-on-surface-variant">{k}</span>
+                  <span className="text-sm font-bold text-on-surface">{v}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {method === 'cash' && (
+            <div className="bg-tertiary-fixed rounded-xl p-4 flex items-start gap-3">
+              <span className="material-symbols-outlined text-on-tertiary-fixed text-2xl">payments</span>
+              <div>
+                <span className="block text-sm font-bold text-on-tertiary-fixed">मंडी कार्यालय में नकद भुगतान</span>
+                <span className="block text-xs text-on-tertiary-fixed/80 mt-0.5">Counter Window No. 5 • Gate 2 Admin Block</span>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Government assurance */}
+        <div className="bg-surface-container rounded-xl p-4 flex items-start gap-3">
+          <span className="material-symbols-outlined text-secondary text-2xl shrink-0" style={{ fontVariationSettings: "'FILL' 1" }}>assured_workload</span>
+          <div>
+            <span className="block text-sm font-bold text-on-surface">भुगतान सुरक्षा गारंटी</span>
+            <ul className="text-xs text-on-surface-variant mt-1 space-y-0.5 list-disc list-inside">
+              <li>24 घंटे में UPI/NEFT ट्रांसफर</li>
+              <li>पूर्ण भुगतान रसीद / Digital Receipt</li>
+              <li>No Aadhaar, No Bank statements required</li>
+            </ul>
+          </div>
+        </div>
+
+        {/* CTA */}
+        <button
+          className="btn-primary"
+          onClick={handlePay}
+          disabled={loading}
+        >
+          {loading
+            ? <><span className="material-symbols-outlined animate-spin">autorenew</span><span>प्रोसेस हो रहा है...</span></>
+            : <><span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>payments</span><span>₹{Number(net).toLocaleString('hi-IN')} – भुगतान की पुष्टि करें</span></>
+          }
+        </button>
+
+      </div>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/StaffLogin.jsx
+================================================================================
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import api from '../api';
+
+const STAFF_ROLES = [
+  { id: 'gate_guard',    emoji: '🛡️', label: 'Gate Guard / द्वारपाल',         sub: 'Gate check-in & Queue management',    route: '/guard-terminal' },
+  { id: 'weighmaster',  emoji: '⚖️', label: 'Weighmaster / तौलिया',           sub: 'Weighbridge & Grade verification',    route: '/weighmaster-desk' },
+  { id: 'auctioneer',   emoji: '🔨', label: 'Auctioneer / नीलामकर्ता',        sub: 'Live auction & Hammer operations',    route: '/auction-board' },
+  { id: 'supervisor',   emoji: '👨‍💼', label: 'Supervisor / पर्यवेक्षक',        sub: 'Full access – Exceptions & Overrides', route: '/supervisor-exceptions' },
+  { id: 'district_admin', emoji: '🏛️', label: 'District Admin / जिला अधिकारी', sub: 'Multi-mandi oversight & Reports',    route: '/dashboard' },
+];
+
+export default function StaffLogin() {
+  const navigate = useNavigate();
+  const [role, setRole] = useState('supervisor');
+  const [employeeId, setEmployeeId] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleLogin = async () => {
+    if (!employeeId || !password) { setError('कृपया सभी फ़ील्ड भरें।'); return; }
+    setError(''); setLoading(true);
+    const ROLE_PAYLOAD_MAP = {
+      gate_guard: 'operator',
+      weighmaster: 'staff',
+      auctioneer: 'operator',
+      supervisor: 'supervisor',
+      district_admin: 'district_admin',
+    };
+    try {
+      const backendRole = ROLE_PAYLOAD_MAP[role] || 'supervisor';
+      const { data } = await api.post('/auth/staff/login', {
+        name: employeeId,
+        password,
+        role: backendRole,
+      });
+      if (data?.data?.token) {
+        localStorage.setItem('kq_token', data.data.token);
+        if (data?.data?.user) {
+          localStorage.setItem('kq_user', JSON.stringify(data.data.user));
+        }
+      }
+    } catch (err) {
+      console.warn('Backend staff login notice (demo fallback active):', err?.response?.data?.message || err?.message);
+      localStorage.setItem('kq_token', 'mock_staff_token');
+    }
+    // Route based on selected role
+    const dest = STAFF_ROLES.find((r) => r.id === role)?.route || '/guard-terminal';
+    navigate(dest);
+    setLoading(false);
+  };
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Header */}
+        <div className="bg-primary-container rounded-xl p-4 shadow-md">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-12 h-12 rounded-xl bg-primary text-on-primary flex items-center justify-center text-2xl font-black shadow-sm">KQ</div>
+            <div>
+              <span className="block text-on-primary-container text-xl font-bold">KisanQ</span>
+              <span className="block text-on-primary-container/70 text-xs uppercase tracking-wider font-extrabold">Staff Management Portal</span>
+            </div>
+          </div>
+          <div className="flex items-center justify-between mt-2">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-on-primary-container text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>admin_panel_settings</span>
+              <span className="text-sm font-bold text-on-primary-container">Staff Access Only / केवल कर्मचारी</span>
+            </div>
+            <span className="px-2 py-1 bg-primary text-on-primary text-xs font-extrabold rounded-full">SIH26032</span>
+          </div>
+        </div>
+
+        {/* Role selector */}
+        <section className="bg-surface-container-lowest rounded-xl shadow-sm p-4">
+          <h2 className="text-sm font-extrabold text-on-surface-variant uppercase mb-3">अपनी भूमिका चुनें / Select Your Role</h2>
+          <div className="space-y-2">
+            {STAFF_ROLES.map((r) => (
+              <label key={r.id} className={`flex items-center gap-4 p-3 rounded-xl cursor-pointer transition-colors ${role === r.id ? 'bg-primary-fixed' : 'bg-surface-container-low hover:bg-surface-container'}`}>
+                <input type="radio" name="role" checked={role === r.id} onChange={() => setRole(r.id)} className="w-5 h-5 text-primary" />
+                <span className="text-2xl">{r.emoji}</span>
+                <div>
+                  <span className={`block text-sm font-bold ${role === r.id ? 'text-on-primary-fixed' : 'text-on-surface'}`}>{r.label}</span>
+                  <span className={`block text-xs ${role === r.id ? 'text-on-primary-fixed-variant' : 'text-on-surface-variant'}`}>{r.sub}</span>
+                </div>
+              </label>
+            ))}
+          </div>
+        </section>
+
+        {/* Credentials */}
+        <section className="bg-surface-container-lowest rounded-xl shadow-sm p-4 space-y-3">
+          <h2 className="text-sm font-extrabold text-on-surface-variant uppercase">लॉगिन विवरण / Login Credentials</h2>
+
+          <div className="space-y-1">
+            <label className="text-sm font-bold text-on-surface">Employee ID / कर्मचारी आईडी</label>
+            <div className="flex items-center gap-2 h-14 bg-surface-container-low rounded-xl px-3">
+              <span className="material-symbols-outlined text-on-surface-variant">badge</span>
+              <input
+                className="flex-1 text-sm font-bold text-on-surface placeholder:text-outline bg-transparent outline-none"
+                placeholder="KQS-2024-001"
+                value={employeeId}
+                onChange={(e) => setEmployeeId(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-bold text-on-surface">पासवर्ड / Password</label>
+            <div className="flex items-center gap-2 h-14 bg-surface-container-low rounded-xl px-3">
+              <span className="material-symbols-outlined text-on-surface-variant">lock</span>
+              <input
+                className="flex-1 text-sm font-bold text-on-surface placeholder:text-outline bg-transparent outline-none"
+                type={showPw ? 'text' : 'password'}
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button onClick={() => setShowPw(!showPw)}>
+                <span className="material-symbols-outlined text-on-surface-variant">{showPw ? 'visibility_off' : 'visibility'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Biometric */}
+          <div className="flex items-center gap-2 bg-secondary-fixed text-on-secondary-fixed rounded-xl p-3 cursor-pointer">
+            <span className="material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>fingerprint</span>
+            <div>
+              <span className="block text-sm font-bold">Biometric Login Available</span>
+              <span className="block text-xs">Fingerprint / Face ID – Touch to authenticate</span>
+            </div>
+          </div>
+        </section>
+
+        {error && <p className="text-sm text-error bg-error-container px-3 py-2 rounded-lg">{error}</p>}
+
+        <button className="btn-primary" onClick={handleLogin} disabled={loading}>
+          {loading
+            ? <><span className="material-symbols-outlined animate-spin">autorenew</span><span>लॉगिन हो रहा है...</span></>
+            : <><span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>admin_panel_settings</span><span>Staff Login / कर्मचारी लॉगिन</span></>
+          }
+        </button>
+
+        {/* Security notice */}
+        <div className="bg-error-container/30 rounded-xl p-4 flex items-start gap-3">
+          <span className="material-symbols-outlined text-error text-xl shrink-0 mt-0.5">security</span>
+          <p className="text-xs text-on-error-container leading-relaxed">
+            यह पोर्टल केवल अधिकृत मंडी कर्मचारियों के लिए है। अनधिकृत पहुंच IPC धारा 66 के अंतर्गत दंडनीय है।
+            <br />
+            <em>This portal is for authorised Mandi staff only.</em>
+          </p>
+        </div>
+
+        {/* Farmer link */}
+        <div className="text-center">
+          <p className="text-sm text-on-surface-variant">किसान हैं? <button onClick={() => navigate('/farmer-login')} className="text-primary font-bold">किसान पोर्टल पर जाएं →</button></p>
+        </div>
+
+      </div>
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/SupervisorExceptions.jsx
+================================================================================
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import api from '../api';
+
+const MOCK_EXCEPTIONS = [
+  {
+    _id: 'exc-001', booking: { tokenNumber: 'KQ-108', farmer: 'रामचंद्र पाटील' }, type: 'quality_dispute',
+    severity: 'high', description: 'Farmer disputes Grade C classification for 12 quintals – claims improper sampling.',
+    status: 'pending_review', createdAt: new Date(Date.now() - 5 * 60 * 1000), centre: 'लासलगांव APMC',
+  },
+  {
+    _id: 'exc-002', booking: { tokenNumber: 'KQ-095', farmer: 'विजय निंबकर' }, type: 'grace_expired',
+    severity: 'medium', description: 'Grace period of 30 min elapsed – farmer not arrived.',
+    status: 'pending_review', createdAt: new Date(Date.now() - 23 * 60 * 1000), centre: 'लासलगांव APMC',
+  },
+  {
+    _id: 'exc-003', booking: { tokenNumber: 'KQ-072', farmer: 'सुनीता देशमुख' }, type: 'weighing_discrepancy',
+    severity: 'low', description: 'Digital vs Physical weighing variance > 2%.',
+    status: 'resolved', createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000), centre: 'निफाड उप-मंडी',
+    resolution: 'Re-weighed and corrected. Accepted.',
+  },
+];
+
+const SEV_CFG = {
+  high:   { cls: 'bg-error-container text-on-error-container', icon: 'error',   label: 'High' },
+  medium: { cls: 'bg-tertiary-fixed text-on-tertiary-fixed',   icon: 'warning', label: 'Medium' },
+  low:    { cls: 'bg-surface-container text-on-surface',       icon: 'info',    label: 'Low' },
+};
+
+const TYPE_LABELS = {
+  quality_dispute: { icon: '🔬', label: 'गुणवत्ता विवाद / Quality Dispute' },
+  grace_expired:   { icon: '⏰', label: 'ग्रेस पीरियड समाप्त / Grace Expired' },
+  weighing_discrepancy: { icon: '⚖️', label: 'तौल विसंगति / Weighing Discrepancy' },
+};
+
+export default function SupervisorExceptions() {
+  const navigate = useNavigate();
+  const [exceptions, setExceptions] = useState(MOCK_EXCEPTIONS);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [resolveModal, setResolveModal] = useState(null);
+  const [resolution, setResolution] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    // NOTE: backend lists by booking – load all pending via a broad GET if available,
+    // otherwise fall back to mock data (which is already set as initial state).
+    api.get('/exceptions/booking/all').then(({ data }) => {
+      if (data?.data?.length) setExceptions(data.data);
+    }).catch(() => {
+      // Backend may not expose a global listing endpoint; mock data used for display.
+    });
+  }, []);
+
+  const handleResolve = async () => {
+    if (!resolution.trim()) return;
+    setSubmitting(true);
+    try {
+      // Backend expects: POST /api/exceptions/:id/override
+      // with body: { overrideReason: string, outcome?: string }
+      await api.post(`/exceptions/${resolveModal._id}/override`, {
+        overrideReason: resolution,
+        outcome: 'Supervisor reviewed and overrode the exception.',
+      });
+    } catch (err) {
+      // Optimistic update even if network fails in dev/mock mode
+      console.warn('Override API unavailable, applying optimistic update:', err?.message);
+    }
+    setExceptions(prev =>
+      prev.map(e =>
+        e._id === resolveModal._id
+          ? { ...e, status: 'resolved', resolution, supervisorOverride: true }
+          : e
+      )
+    );
+    setSubmitting(false);
+    setResolveModal(null);
+    setResolution('');
+  };
+
+  const visible = statusFilter === 'all' ? exceptions : exceptions.filter(e => e.status === statusFilter);
+  const pending = exceptions.filter(e => e.status === 'pending_review').length;
+  const resolved = exceptions.filter(e => e.status === 'resolved').length;
+
+  const fmtTime = (d) => {
+    const mins = Math.floor((Date.now() - new Date(d)) / 60000);
+    return mins < 60 ? `${mins} मिनट पहले` : `${Math.floor(mins / 60)} घंटे पहले`;
+  };
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-4 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Header */}
+        <header className="bg-primary rounded-xl p-4 shadow-md">
+          <div className="flex items-start justify-between">
+            <div>
+              <span className="text-on-primary/70 text-xs font-extrabold uppercase tracking-wider block">
+                <span className="material-symbols-outlined text-base align-middle">admin_panel_settings</span> Supervisor Dashboard
+              </span>
+              <h1 className="text-xl font-bold text-on-primary">एक्सेप्शन प्रबंधन</h1>
+              <p className="text-sm text-on-primary/80">Exception Management Console</p>
+            </div>
+            <div className="text-right">
+              <span className="block text-on-primary text-2xl font-black">{pending}</span>
+              <span className="block text-on-primary/70 text-xs">लंबित / Pending</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mt-4">
+            {[['Total', exceptions.length, 'bg-on-primary/20'], ['Pending', pending, 'bg-error/20'], ['Resolved', resolved, 'bg-secondary-fixed/40']].map(([l, v, cls]) => (
+              <div key={l} className={`${cls} rounded-lg p-2 text-center`}>
+                <span className="block text-xl font-black text-on-primary">{v}</span>
+                <span className="block text-xs text-on-primary/70">{l}</span>
+              </div>
+            ))}
+          </div>
+        </header>
+
+        {/* Filter */}
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {[['all', `सभी (${exceptions.length})`], ['pending_review', `लंबित (${pending})`], ['resolved', `हल (${resolved})`]].map(([f, label]) => (
+            <button key={f} onClick={() => setStatusFilter(f)}
+              className={`filter-chip ${statusFilter === f ? 'bg-primary text-on-primary' : 'bg-surface-container-lowest text-on-surface'}`}
+            >{label}</button>
+          ))}
+        </div>
+
+        {/* Exception cards */}
+        <div className="flex flex-col gap-4">
+          {visible.map((ex) => {
+            const sev = SEV_CFG[ex.severity] || SEV_CFG.low;
+            const typ = TYPE_LABELS[ex.type] || { icon: '⚠️', label: ex.type };
+            return (
+              <div key={ex._id} className="bg-surface-container-lowest rounded-xl shadow-md overflow-hidden">
+                <div className={`flex items-center justify-between px-4 py-2 ${sev.cls}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-base" style={{ fontVariationSettings: "'FILL' 1" }}>{sev.icon}</span>
+                    <span className="text-xs font-extrabold uppercase">{sev.label} Priority</span>
+                  </div>
+                  {ex.status === 'pending_review'
+                    ? <span className="text-xs font-extrabold bg-on-error/20 px-2 py-0.5 rounded-full animate-pulse">लंबित समीक्षा</span>
+                    : <span className="text-xs font-extrabold">✅ हल</span>
+                  }
+                </div>
+
+                <div className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="block text-base font-bold text-on-surface">{typ.icon} {typ.label}</span>
+                      <span className="block text-sm text-on-surface-variant">{ex.booking?.tokenNumber} • {ex.booking?.farmer}</span>
+                      <span className="block text-xs text-on-surface-variant mt-0.5">{ex.centre} • {fmtTime(ex.createdAt)}</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-surface-container-low rounded-lg p-3">
+                    <span className="block text-xs font-extrabold text-on-surface-variant uppercase mb-1">विवरण / Description</span>
+                    <p className="text-sm text-on-surface leading-relaxed">{ex.description}</p>
+                  </div>
+
+                  {ex.resolution && (
+                    <div className="bg-primary-fixed rounded-lg p-3">
+                      <span className="block text-xs font-extrabold text-on-primary-fixed-variant uppercase mb-1">निर्णय / Resolution</span>
+                      <p className="text-sm text-on-primary-fixed leading-relaxed">{ex.resolution}</p>
+                    </div>
+                  )}
+
+                  {ex.status === 'pending_review' && (
+                    <div className="flex gap-2">
+                      <button onClick={() => { setResolveModal(ex); setResolution(''); }} className="flex-1 h-11 bg-primary text-on-primary rounded-xl text-sm font-bold flex items-center justify-center gap-1.5">
+                        <span className="material-symbols-outlined text-base">gavel</span>
+                        निर्णय दें / Override
+                      </button>
+                      <button className="h-11 px-4 bg-surface-container-high rounded-xl text-on-surface text-sm font-bold flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-base">call</span>
+                        संपर्क
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Notification section */}
+        <section className="bg-surface-container-lowest rounded-xl shadow-sm p-4">
+          <h2 className="text-sm font-extrabold text-on-surface-variant uppercase mb-3">हाल की सूचनाएं / Recent Notifications</h2>
+          <div className="space-y-2">
+            {[
+              { icon: 'sms', label: 'SMS Alert', body: 'KQ-108 को मंडी आगमन रिमाइंडर भेजा गया।', time: '08:30 AM', cls: 'text-secondary' },
+              { icon: 'push_pin', label: 'Push Alert', body: 'KQ-095: ग्रेस पीरियड 5 मिनट में समाप्त।', time: '09:15 AM', cls: 'text-tertiary' },
+              { icon: 'campaign', label: 'Announcement', body: 'Lane B Weighbridge W3 – KQ-107 Ready for Weighing.', time: '10:42 AM', cls: 'text-primary' },
+            ].map((n) => (
+              <div key={n.label} className="flex items-start gap-3 py-2 border-b border-outline-variant/20">
+                <span className={`material-symbols-outlined text-xl ${n.cls}`}>{n.icon}</span>
+                <div className="flex-1">
+                  <span className="block text-xs font-extrabold text-on-surface-variant uppercase">{n.label}</span>
+                  <span className="block text-sm text-on-surface">{n.body}</span>
+                </div>
+                <span className="text-xs text-on-surface-variant shrink-0">{n.time}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+      </div>
+
+      {/* Resolve modal */}
+      {resolveModal && (
+        <div className="fixed inset-0 bg-on-surface/60 z-50 flex items-end justify-center p-4" onClick={(e) => e.target === e.currentTarget && setResolveModal(null)}>
+          <div className="bg-surface-container-lowest rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+            <h2 className="text-xl font-bold text-on-surface">निर्णय दर्ज करें</h2>
+            <p className="text-sm text-on-surface-variant">{resolveModal.booking?.tokenNumber} – {resolveModal.booking?.farmer}</p>
+            <textarea
+              className="w-full h-28 p-3 bg-surface-container-low rounded-xl text-sm text-on-surface resize-none focus:outline-none"
+              placeholder="Supervisor override reasoning..."
+              value={resolution}
+              onChange={(e) => setResolution(e.target.value)}
+            />
+            <div className="flex gap-2">
+              <button onClick={() => setResolveModal(null)} className="flex-1 h-12 bg-surface-container rounded-xl text-on-surface text-sm font-bold">रद्द</button>
+              <button onClick={handleResolve} disabled={submitting} className="flex-1 h-12 bg-primary text-on-primary rounded-xl text-sm font-bold flex items-center justify-center gap-2">
+                {submitting ? <span className="material-symbols-outlined animate-spin">autorenew</span> : <span className="material-symbols-outlined">gavel</span>}
+                निर्णय पक्का करें
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+
+================================================================================
+FILE: src/pages/WeighmasterDesk.jsx
+================================================================================
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import api from '../api';
+
+const MOCK_WEIGH_QUEUE = [
+  { _id: '65f1a2b3c4d5e6f7a8b9c0d1', tokenNumber: 'KQ-108', farmerName: 'रामचंद्र पाटील', crop: 'Red Onion', declaredQty: '50 क्विंटल', vehicleNo: 'MH 15 AB 4521', lane: 'Lane B - Weighbridge 3' },
+  { _id: '65f1a2b3c4d5e6f7a8b9c0d2', tokenNumber: 'KQ-107', farmerName: 'सुरेश जाधव', crop: 'Yellow Maize', declaredQty: '55 क्विंटल', vehicleNo: 'MH 15 GH 9012', lane: 'Lane A - Weighbridge 1' },
+];
+
+export default function WeighmasterDesk() {
+  const navigate = useNavigate();
+  const [selectedBooking, setSelectedBooking] = useState(MOCK_WEIGH_QUEUE[0]);
+  const [grossWeight, setGrossWeight] = useState(62.5);
+  const [tareWeight, setTareWeight] = useState(12.5);
+  const [grade, setGrade] = useState('Grade A');
+  const [submitting, setSubmitting] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const netWeight = Math.max(0, grossWeight - tareWeight);
+
+  const handleRecordWeighment = async () => {
+    setSubmitting(true);
+    setSuccessMsg('');
+    setErrorMsg('');
+    try {
+      // POST /api/procurement/inspection
+      await api.post('/procurement/inspection', {
+        bookingId: selectedBooking._id,
+        grade,
+        moisturePercentage: 12.0,
+        inspectorNotes: 'Quality verified at weighbridge desk'
+      });
+
+      // POST /api/procurement/weight
+      await api.post('/procurement/weight', {
+        bookingId: selectedBooking._id,
+        grossWeight,
+        tareWeight,
+        netWeight,
+        weighbridgeId: 'WB-03'
+      });
+
+      setSuccessMsg(`तौल रिकॉर्ड सफल! Net Weight: ${netWeight} क्विंटल (${grade})`);
+    } catch (err) {
+      console.warn('Weighment API notice (demo fallback active):', err?.response?.data?.message || err?.message);
+      setSuccessMsg(`[Demo Mode] तौल रिकॉर्ड पक्का हुआ! Net Weight: ${netWeight} क्विंटल`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-12 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+
+        {/* Header */}
+        <header className="bg-primary rounded-xl p-4 shadow-md text-on-primary">
+          <div className="flex items-start justify-between">
+            <div>
+              <span className="text-xs font-extrabold uppercase tracking-wider block text-on-primary/70">
+                ⚖️ Weighbridge Terminal
+              </span>
+              <h1 className="text-xl font-bold">तौलिया डेस्क / Weighmaster Desk</h1>
+              <p className="text-xs text-on-primary/80">Digital Gross & Tare Weight Recording System</p>
+            </div>
+            <button onClick={() => navigate('/staff-login')} className="px-3 py-1 bg-on-primary/10 rounded-lg text-xs font-bold">
+              लॉगआउट
+            </button>
+          </div>
+        </header>
+
+        {/* Active vehicle selecting */}
+        <section className="bg-surface-container-lowest rounded-xl shadow-sm p-4 space-y-3">
+          <h2 className="text-xs font-extrabold text-on-surface-variant uppercase">वर्तमान वाहन / Active Vehicle at Scale</h2>
+          <div className="grid grid-cols-2 gap-2">
+            {MOCK_WEIGH_QUEUE.map((b) => (
+              <button
+                key={b.tokenNumber}
+                onClick={() => { setSelectedBooking(b); setSuccessMsg(''); setErrorMsg(''); }}
+                className={`p-3 rounded-xl text-left border transition-all ${selectedBooking.tokenNumber === b.tokenNumber ? 'border-primary bg-primary-fixed' : 'border-outline-variant/30 bg-surface-container-low'}`}
+              >
+                <span className="block text-sm font-extrabold text-primary">{b.tokenNumber}</span>
+                <span className="block text-xs font-bold text-on-surface truncate">{b.farmerName}</span>
+                <span className="block text-[10px] text-on-surface-variant">{b.crop} • {b.declaredQty}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Selected detail */}
+        <section className="bg-surface-container-lowest rounded-xl shadow-sm p-4 space-y-3">
+          <div className="flex items-center justify-between pb-2 border-b border-outline-variant/20">
+            <div>
+              <span className="text-xs text-on-surface-variant block">टोकन व किसान</span>
+              <span className="text-lg font-black text-on-surface">{selectedBooking.tokenNumber} — {selectedBooking.farmerName}</span>
+            </div>
+            <span className="px-2.5 py-1 rounded-full bg-secondary-fixed text-on-secondary-fixed text-xs font-extrabold">
+              {selectedBooking.lane}
+            </span>
+          </div>
+
+          {/* Grade selection */}
+          <div>
+            <label className="block text-xs font-extrabold text-on-surface-variant uppercase mb-1">ग्रेड चयन / Quality Grade</label>
+            <div className="grid grid-cols-3 gap-2">
+              {['Grade A', 'Grade B', 'Grade C'].map((g) => (
+                <button
+                  key={g}
+                  onClick={() => setGrade(g)}
+                  className={`py-2 rounded-lg text-xs font-bold ${grade === g ? 'bg-primary text-on-primary shadow-sm' : 'bg-surface-container-high text-on-surface'}`}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Weights */}
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <div>
+              <label className="block text-xs font-bold text-on-surface mb-1">कुल भार / Gross (Qtl)</label>
+              <input
+                type="number"
+                step="0.5"
+                value={grossWeight}
+                onChange={(e) => setGrossWeight(Number(e.target.value))}
+                className="w-full h-12 px-3 bg-surface-container-low rounded-xl text-lg font-black text-on-surface outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-on-surface mb-1">खाली वाहन / Tare (Qtl)</label>
+              <input
+                type="number"
+                step="0.5"
+                value={tareWeight}
+                onChange={(e) => setTareWeight(Number(e.target.value))}
+                className="w-full h-12 px-3 bg-surface-container-low rounded-xl text-lg font-black text-on-surface outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Net weight readout */}
+          <div className="bg-primary-fixed rounded-xl p-4 flex items-center justify-between shadow-sm">
+            <div>
+              <span className="text-xs font-extrabold text-on-primary-fixed-variant uppercase block">शुद्ध वजन / Calculated Net Weight</span>
+              <span className="text-2xl font-black text-on-primary-fixed">{netWeight.toFixed(2)} क्विंटल</span>
+            </div>
+            <span className="material-symbols-outlined text-3xl text-primary">scale</span>
+          </div>
+
+          {successMsg && <p className="p-3 bg-secondary-fixed text-on-secondary-fixed rounded-xl text-xs font-bold">{successMsg}</p>}
+          {errorMsg && <p className="p-3 bg-error-container text-on-error-container rounded-xl text-xs font-bold">{errorMsg}</p>}
+
+          <button
+            onClick={handleRecordWeighment}
+            disabled={submitting}
+            className="w-full h-14 bg-primary text-on-primary rounded-xl font-bold text-base shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all"
+          >
+            {submitting ? (
+              <span className="material-symbols-outlined animate-spin">autorenew</span>
+            ) : (
+              <>
+                <span className="material-symbols-outlined">verified</span>
+                <span>तौल दर्ज करें व रसीद प्रिंट करें</span>
+              </>
+            )}
+          </button>
+        </section>
+
+      </div>
+    </main>
+  );
+}
+
+

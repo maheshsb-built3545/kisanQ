@@ -18,15 +18,17 @@ export default function NotFound() {
         </div>
         <div className="flex flex-col gap-3">
           <button
+            id="not-found-home-btn"
             onClick={() => navigate('/')}
-            className="w-full h-14 bg-primary text-on-primary rounded-xl font-bold text-sm shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all"
+            className="btn-primary"
           >
             <span className="material-symbols-outlined text-xl">home</span>
             मुख्य द्वार पर जाएं / Go to Main Gateway
           </button>
           <button
+            id="not-found-back-btn"
             onClick={() => navigate(-1)}
-            className="w-full h-12 bg-surface-container text-on-surface rounded-xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-all"
+            className="btn-secondary"
           >
             <span className="material-symbols-outlined text-xl">arrow_back</span>
             पीछे जाएं / Go Back

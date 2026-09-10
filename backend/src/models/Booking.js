@@ -105,6 +105,21 @@ const bookingSchema = new mongoose.Schema(
     },
     gracePeriodEnd: {
       type: Date
+    },
+    paymentStatus: {
+      type: String,
+      enum: {
+        values: [
+          'procurement_approved',
+          'bill_generated',
+          'payment_file_submitted',
+          'payment_initiated',
+          'payment_confirmed',
+          'status_unavailable'
+        ],
+        message: '{VALUE} is not a valid payment status'
+      },
+      default: 'status_unavailable'
     }
   },
   {

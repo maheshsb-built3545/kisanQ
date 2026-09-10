@@ -1,501 +1,308 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { io } from 'socket.io-client';
 import api from '../api';
 
-const API_BASE = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
-const DEFAULT_CENTRE_ID = '65f1a2b3c4d5e6f7a8b9c0d1';
+/**
+ * WeighmasterDesk
+ *
+ * Both POST /procurement/inspection and POST /procurement/weight write DIRECTLY to
+ * the Booking document (confirmed in procurementService.js). Neither touches
+ * ProcurementRecord.stages[].
+ *
+ * Inspection payload: { bookingId, grade, moisturePercentage, inspectorNotes }
+ *   → sets Booking.status = 'INSPECTED'
+ *
+ * Weight payload: { bookingId, grossWeight, tareWeight, netWeight, weighbridgeId }
+ *   → netWeight = gross - tare (calculated client-side, sent explicitly)
+ *   → sets Booking.status = 'WEIGHED_READY_FOR_AUCTION' (displayed as "Weighed — Ready")
+ *
+ * SECURITY FLAG: These routes have no auth middleware on the backend.
+ * The frontend calls them as-is today; this is a backend issue to fix separately.
+ */
 
-const MOCK_QUEUE = [
-  {
-    _id: '65f1a2b3c4d5e6f7a8b9c0d1',
-    tokenNumber: 'KQ-108',
-    farmerName: 'रामचंद्र पाटील',
-    crop: 'Red Onion',
-    quantityBand: '15q+',
-    declaredQty: '50 क्विंटल',
-    vehicleNo: 'MH 15 AB 4521',
-    lane: 'Lane B - Weighbridge 3',
-    status: 'CHECKED_IN'
-  },
-  {
-    _id: '65f1a2b3c4d5e6f7a8b9c0d2',
-    tokenNumber: 'KQ-107',
-    farmerName: 'सुरेश जाधव',
-    crop: 'Yellow Maize',
-    quantityBand: '15q+',
-    declaredQty: '55 क्विंटल',
-    vehicleNo: 'MH 15 GH 9012',
-    lane: 'Lane A - Weighbridge 1',
-    status: 'INSPECTED',
-    grade: 'Grade A',
-    moisturePercentage: 11.5
-  }
-];
+const GRADES = ['Grade A', 'Grade B', 'Grade C'];
+
+function Field({ label, children }) {
+  return (
+    <div>
+      <label className="block text-xs font-extrabold text-on-surface-variant uppercase tracking-wider mb-1.5">
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
 
 export default function WeighmasterDesk() {
   const navigate = useNavigate();
-  const [queue, setQueue] = useState(MOCK_QUEUE);
-  const [selectedBooking, setSelectedBooking] = useState(MOCK_QUEUE[0]);
-  
-  // Inspection Form State
-  const [grade, setGrade] = useState('Grade A');
-  const [moisturePercentage, setMoisturePercentage] = useState(11.5);
-  const [inspectorNotes, setInspectorNotes] = useState('');
-  const [inspectLoading, setInspectLoading] = useState(false);
+  const [tab, setTab]       = useState('inspection'); // 'inspection' | 'weight'
 
-  // Weighing Form State
-  const [grossWeight, setGrossWeight] = useState(62.5);
-  const [tareWeight, setTareWeight] = useState(12.5);
-  const [weighbridgeId, setWeighbridgeId] = useState('WB-03');
-  const [weightLoading, setWeightLoading] = useState(false);
+  // Shared
+  const [bookingId, setBookingId] = useState('');
 
-  // Feedback Messages
-  const [successMsg, setSuccessMsg] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
+  // Inspection form
+  const [grade, setGrade]               = useState('Grade A');
+  const [moisture, setMoisture]         = useState('');
+  const [inspectorNotes, setNotes]      = useState('');
+  const [inspResult, setInspResult]     = useState(null);
+  const [inspLoading, setInspLoading]   = useState(false);
+  const [inspError, setInspError]       = useState('');
 
-  const netWeight = Math.max(0, Number(grossWeight || 0) - Number(tareWeight || 0));
+  // Weight form
+  const [grossWeight, setGross]         = useState('');
+  const [tareWeight, setTare]           = useState('');
+  const [weighbridgeId, setWbId]        = useState('');
+  const [wtResult, setWtResult]         = useState(null);
+  const [wtLoading, setWtLoading]       = useState(false);
+  const [wtError, setWtError]           = useState('');
 
-  // 1. Fetch Queue & Socket.IO Auto-Refresh
-  const fetchQueue = async () => {
+  const handleInspection = async (e) => {
+    e.preventDefault();
+    setInspError('');
+    setInspResult(null);
+    if (!bookingId.trim()) { setInspError('Booking ID आवश्यक है।'); return; }
+    setInspLoading(true);
     try {
-      const { data } = await api.get(`/queue/live/${DEFAULT_CENTRE_ID}`);
-      let list = [];
-      if (Array.isArray(data?.data?.entries)) {
-        list = data.data.entries;
-      } else if (Array.isArray(data?.data)) {
-        list = data.data;
-      }
-      
-      if (list.length > 0) {
-        // Filter list for vehicles needing inspection or weighing
-        const activeProcurementQueue = list.filter((b) =>
-          ['CHECKED_IN', 'INSPECTED'].includes(b.status)
-        );
-        if (activeProcurementQueue.length > 0) {
-          setQueue(activeProcurementQueue);
-          if (!selectedBooking || !activeProcurementQueue.find((b) => b._id === selectedBooking._id)) {
-            setSelectedBooking(activeProcurementQueue[0]);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('Queue fetch notice (demo fallback active):', err?.message);
-    }
-  };
-
-  useEffect(() => {
-    fetchQueue();
-
-    const socket = io(API_BASE, { auth: { token: localStorage.getItem('kq_token') } });
-    socket.on('connect', () => {
-      socket.emit('join_centre_queue', DEFAULT_CENTRE_ID);
-    });
-
-    socket.on('queue:update', () => {
-      fetchQueue();
-    });
-
-    return () => socket.disconnect();
-  }, []);
-
-  // 2. Submit Quality Inspection Form (POST /api/procurement/inspection)
-  const handleInspectionSubmit = async (e) => {
-    e?.preventDefault();
-    if (!selectedBooking) return;
-
-    setInspectLoading(true);
-    setSuccessMsg('');
-    setErrorMsg('');
-
-    try {
-      const res = await api.post('/procurement/inspection', {
-        bookingId: selectedBooking._id,
+      // POST /procurement/inspection — writes to Booking directly
+      const { data } = await api.post('/procurement/inspection', {
+        bookingId:          bookingId.trim(),
         grade,
-        moisturePercentage: Number(moisturePercentage),
-        inspectorNotes: inspectorNotes || 'Quality verified at inspection desk'
+        moisturePercentage: moisture ? Number(moisture) : undefined,
+        inspectorNotes:     inspectorNotes.trim() || undefined,
       });
-
-      const updated = res.data?.data;
-      setSuccessMsg(`निरीक्षण सफल! ${updated?.tokenNumber || selectedBooking.tokenNumber} -> Status: INSPECTED (${grade})`);
-      
-      // Update local state queue vehicle status to INSPECTED
-      setQueue((prev) =>
-        prev.map((b) =>
-          b._id === selectedBooking._id
-            ? { ...b, status: 'INSPECTED', grade, moisturePercentage }
-            : b
-        )
-      );
-      setSelectedBooking((prev) => ({ ...prev, status: 'INSPECTED', grade, moisturePercentage }));
-      setInspectorNotes('');
+      setInspResult(data.data || data);
     } catch (err) {
-      console.warn('Inspection submit notice (demo fallback):', err?.response?.data?.message || err?.message);
-      setSuccessMsg(`[Demo Mode] गुणवत्ता परीक्षण दर्ज! (${grade}, Moisture: ${moisturePercentage}%)`);
-      setQueue((prev) =>
-        prev.map((b) =>
-          b._id === selectedBooking._id
-            ? { ...b, status: 'INSPECTED', grade, moisturePercentage }
-            : b
-        )
-      );
-      setSelectedBooking((prev) => ({ ...prev, status: 'INSPECTED', grade, moisturePercentage }));
+      setInspError(err.response?.data?.message || err.message || 'निरीक्षण रिकॉर्ड नहीं हो सका।');
     } finally {
-      setInspectLoading(false);
+      setInspLoading(false);
     }
   };
 
-  // 3. Submit Weight Recording Form (POST /api/procurement/weight)
-  const handleWeightSubmit = async (e) => {
-    e?.preventDefault();
-    if (!selectedBooking) return;
-
-    setWeightLoading(true);
-    setSuccessMsg('');
-    setErrorMsg('');
-
+  const handleWeight = async (e) => {
+    e.preventDefault();
+    setWtError('');
+    setWtResult(null);
+    if (!bookingId.trim()) { setWtError('Booking ID आवश्यक है।'); return; }
+    const gross = Number(grossWeight);
+    const tare  = Number(tareWeight);
+    if (!gross || gross <= 0) { setWtError('सकल भार (gross) सही दर्ज करें।'); return; }
+    if (tare < 0)              { setWtError('पेकेजिंग भार (tare) ऋणात्मक नहीं हो सकता।'); return; }
+    const net = gross - tare;
+    setWtLoading(true);
     try {
-      const res = await api.post('/procurement/weight', {
-        bookingId: selectedBooking._id,
-        grossWeight: Number(grossWeight),
-        tareWeight: Number(tareWeight),
-        netWeight,
-        weighbridgeId
+      // POST /procurement/weight — writes to Booking directly
+      const { data } = await api.post('/procurement/weight', {
+        bookingId:    bookingId.trim(),
+        grossWeight:  gross,
+        tareWeight:   tare,
+        netWeight:    net,
+        weighbridgeId:weighbridgeId.trim() || undefined,
       });
-
-      const updated = res.data?.data;
-      setSuccessMsg(`तौल दर्ज सफल! Net Weight: ${netWeight.toFixed(2)} क्विंटल (${selectedBooking.tokenNumber})`);
-      
-      // Clear vehicle from active weighbridge queue upon successful weight completion
-      setQueue((prev) => prev.filter((b) => b._id !== selectedBooking._id));
-      const remaining = queue.filter((b) => b._id !== selectedBooking._id);
-      if (remaining.length > 0) {
-        setSelectedBooking(remaining[0]);
-      }
+      setWtResult(data.data || data);
     } catch (err) {
-      console.warn('Weight submit notice (demo fallback):', err?.response?.data?.message || err?.message);
-      setSuccessMsg(`[Demo Mode] तौल रिकॉर्ड सम्पन्न! Net Weight: ${netWeight.toFixed(2)} क्विंटल`);
-      setQueue((prev) => prev.filter((b) => b._id !== selectedBooking._id));
-      const remaining = queue.filter((b) => b._id !== selectedBooking._id);
-      if (remaining.length > 0) {
-        setSelectedBooking(remaining[0]);
-      }
+      setWtError(err.response?.data?.message || err.message || 'भार रिकॉर्ड नहीं हो सका।');
     } finally {
-      setWeightLoading(false);
+      setWtLoading(false);
     }
   };
+
+  const ResultCard = ({ result, statusLabel }) => (
+    <div className="bg-secondary-fixed text-on-secondary-fixed rounded-xl p-4 space-y-2">
+      <div className="flex items-center gap-2 font-extrabold text-sm">
+        <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+        सफलतापूर्वक दर्ज — {statusLabel}
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-xs mt-1">
+        <div><span className="block opacity-70">Token</span><span className="font-bold">{result.tokenNumber}</span></div>
+        <div><span className="block opacity-70">Status</span><span className="font-bold">{result.status}</span></div>
+        {result.grade && <div><span className="block opacity-70">Grade</span><span className="font-bold">{result.grade}</span></div>}
+        {result.grossWeight != null && <div><span className="block opacity-70">Gross</span><span className="font-bold">{result.grossWeight} Q</span></div>}
+        {result.netWeight != null && <div><span className="block opacity-70">Net</span><span className="font-bold">{result.netWeight} Q</span></div>}
+      </div>
+    </div>
+  );
 
   return (
-    <main className="min-h-screen bg-surface font-jakarta text-on-surface p-4 md:p-6">
-      <div className="max-w-7xl mx-auto flex flex-col gap-6">
+    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-8 font-jakarta">
+      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
 
-        {/* Header Bar */}
-        <header className="bg-primary rounded-2xl p-5 shadow-md text-on-primary flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Header */}
+        <header className="flex items-center gap-2 py-1">
+          <button onClick={() => navigate(-1)} className="w-10 h-10 rounded-xl bg-surface-container-lowest flex items-center justify-center shadow-sm">
+            <span className="material-symbols-outlined text-xl">arrow_back</span>
+          </button>
           <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-extrabold uppercase tracking-widest text-on-primary/70 block">
-                ⚖️ Mandi Procurement Terminal
-              </span>
-              <span className="px-2 py-0.5 rounded bg-on-primary/20 text-[10px] font-bold">
-                SIH26032 Live Scale
-              </span>
-            </div>
-            <h1 className="text-2xl font-black mt-1">तौलिया डेस्क / Weighmaster & Quality Terminal</h1>
-            <p className="text-xs text-on-primary/80">Digital Quality Inspection, Moisture Testing & Gross/Tare Scale Operator</p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <span className="px-3 py-1.5 rounded-full bg-secondary-fixed text-on-secondary-fixed text-xs font-extrabold flex items-center gap-1.5 shadow-sm">
-              <span className="w-2 h-2 rounded-full bg-secondary animate-ping" />
-              Scale Active
-            </span>
-            <button
-              onClick={() => navigate('/staff-login')}
-              className="px-4 py-2 bg-on-primary/10 hover:bg-on-primary/20 text-on-primary text-xs font-bold rounded-xl active:scale-95 transition-all"
-            >
-              लॉगआउट
-            </button>
+            <h1 className="text-xl font-black text-on-surface">तौल डेस्क</h1>
+            <p className="text-xs text-on-surface-variant">Weighmaster Desk — Inspection & Weighbridge</p>
           </div>
         </header>
 
-        {/* Alert Feedback */}
-        {successMsg && (
-          <div className="p-4 bg-secondary-fixed text-on-secondary-fixed rounded-2xl text-sm font-bold shadow-sm flex items-center gap-2">
-            <span className="material-symbols-outlined text-lg">verified</span>
-            <span>{successMsg}</span>
-          </div>
-        )}
-        {errorMsg && (
-          <div className="p-4 bg-error-container text-on-error-container rounded-2xl text-sm font-bold shadow-sm flex items-center gap-2">
-            <span className="material-symbols-outlined text-lg">error</span>
-            <span>{errorMsg}</span>
-          </div>
-        )}
+        {/* Booking ID (shared between tabs) */}
+        <Field label="Booking ID">
+          <input
+            id="wm-booking-id"
+            type="text"
+            className="input-field"
+            placeholder="MongoDB Booking _id या Token Number"
+            value={bookingId}
+            onChange={(e) => { setBookingId(e.target.value); setInspResult(null); setWtResult(null); }}
+          />
+        </Field>
 
-        {/* Grid Layout: Active Vehicles (Left) vs Forms (Right) */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-          {/* Left Column: Active Vehicle Queue */}
-          <section className="bg-surface-container-lowest rounded-2xl shadow-sm p-5 space-y-4 border border-outline-variant/20 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-extrabold text-on-surface-variant uppercase tracking-wider">
-                  वजन एवं गुणवत्ता कतार / Scale Queue
-                </h2>
-                <span className="px-2 py-0.5 rounded bg-surface-container-high text-on-surface text-xs font-bold">
-                  {queue.length} Vehicles
-                </span>
-              </div>
-
-              {queue.length === 0 ? (
-                <div className="p-8 text-center bg-surface-container-low rounded-xl">
-                  <span className="material-symbols-outlined text-4xl text-on-surface-variant">check_circle</span>
-                  <p className="text-sm font-bold text-on-surface mt-2">कतार खाली है / Queue Clear</p>
-                  <p className="text-xs text-on-surface-variant">No vehicles waiting for inspection or weighing</p>
-                </div>
-              ) : (
-                <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
-                  {queue.map((b) => {
-                    const isSelected = selectedBooking?._id === b._id;
-                    const isInspected = b.status === 'INSPECTED';
-
-                    return (
-                      <button
-                        key={b._id}
-                        onClick={() => {
-                          setSelectedBooking(b);
-                          setSuccessMsg('');
-                          setErrorMsg('');
-                        }}
-                        className={`w-full p-4 rounded-xl text-left border transition-all flex items-center justify-between ${
-                          isSelected
-                            ? 'border-primary bg-primary-fixed shadow-sm'
-                            : 'border-outline-variant/30 bg-surface-container-low hover:bg-surface-container'
-                        }`}
-                      >
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-base font-black text-primary">{b.tokenNumber}</span>
-                            <span
-                              className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
-                                isInspected
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-amber-100 text-amber-800'
-                              }`}
-                            >
-                              {isInspected ? 'INSPECTED' : 'CHECKED-IN'}
-                            </span>
-                          </div>
-                          <span className="block text-sm font-bold text-on-surface mt-0.5">{b.farmerName || 'रामचंद्र पाटील'}</span>
-                          <span className="block text-xs text-on-surface-variant">
-                            {b.crop || 'Crop'} • {b.quantityBand || b.declaredQty || '15q+'}
-                          </span>
-                        </div>
-
-                        <span className="material-symbols-outlined text-on-surface-variant">
-                          {isSelected ? 'task_alt' : 'chevron_right'}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {selectedBooking && (
-              <div className="bg-surface-container-low rounded-xl p-4 border border-outline-variant/20 space-y-1.5 text-xs">
-                <span className="font-extrabold text-on-surface-variant block uppercase">चयनित वाहन विवरण / Active Truck</span>
-                <div className="flex justify-between font-bold text-on-surface">
-                  <span>टोकन / Token:</span>
-                  <span className="text-primary">{selectedBooking.tokenNumber}</span>
-                </div>
-                <div className="flex justify-between text-on-surface-variant">
-                  <span>वाहन / Vehicle:</span>
-                  <span>{selectedBooking.vehicleNo || 'MH 15 AB 4521'}</span>
-                </div>
-                <div className="flex justify-between text-on-surface-variant">
-                  <span>स्कैल लेन / Lane:</span>
-                  <span>{selectedBooking.lane || 'Lane B - Weighbridge 3'}</span>
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* Right Column: Dynamic Form Panels (Inspection vs Weight) */}
-          <div className="lg:col-span-2 space-y-6">
-
-            {/* FORM 1: Quality Inspection Form (Required when status is CHECKED_IN) */}
-            <section className="bg-surface-container-lowest rounded-2xl shadow-sm p-6 space-y-5 border border-outline-variant/20">
-              <div className="flex items-center justify-between pb-3 border-b border-outline-variant/20">
-                <div>
-                  <span className="text-xs font-extrabold text-primary uppercase tracking-wider block">
-                    चरण 1 / Step 1
-                  </span>
-                  <h2 className="text-lg font-bold text-on-surface">गुणवत्ता परीक्षण / Quality Inspection Form</h2>
-                </div>
-                <span className="px-3 py-1 rounded-full bg-surface-container-high text-xs font-extrabold text-on-surface">
-                  Status: {selectedBooking?.status || 'CHECKED_IN'}
-                </span>
-              </div>
-
-              <form onSubmit={handleInspectionSubmit} className="space-y-4">
-
-                {/* Grade Selector */}
-                <div>
-                  <label className="block text-xs font-extrabold text-on-surface-variant uppercase mb-2">
-                    फसल गुणवत्ता ग्रेड / Crop Quality Grade
-                  </label>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    {['Grade A', 'Grade B', 'Grade C', 'Rejected'].map((g) => (
-                      <button
-                        type="button"
-                        key={g}
-                        onClick={() => setGrade(g)}
-                        className={`py-3 px-3 rounded-xl text-xs font-black border transition-all ${
-                          grade === g
-                            ? g === 'Rejected'
-                              ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
-                              : 'bg-primary text-on-primary border-primary shadow-sm'
-                            : 'bg-surface-container-low border-outline-variant/30 text-on-surface hover:bg-surface-container'
-                        }`}
-                      >
-                        {g}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Moisture Percentage */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-on-surface mb-1">
-                      नमी का प्रतिशत / Moisture Percentage (%)
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={moisturePercentage}
-                        onChange={(e) => setMoisturePercentage(e.target.value)}
-                        className="w-full h-12 px-3 bg-surface-container-low rounded-xl text-base font-extrabold text-on-surface outline-none border border-outline-variant/30"
-                        placeholder="11.5"
-                      />
-                      <span className="absolute right-3 top-3 text-xs font-bold text-on-surface-variant">%</span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-on-surface mb-1">
-                      निरीक्षक टिप्पणी / Inspector Notes
-                    </label>
-                    <input
-                      type="text"
-                      value={inspectorNotes}
-                      onChange={(e) => setInspectorNotes(e.target.value)}
-                      className="w-full h-12 px-3 bg-surface-container-low rounded-xl text-sm font-bold text-on-surface outline-none border border-outline-variant/30"
-                      placeholder="Passed quality grade verification"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={inspectLoading || !selectedBooking}
-                  className="w-full h-13 bg-primary text-on-primary font-extrabold rounded-xl text-sm shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50"
-                >
-                  {inspectLoading ? (
-                    <span className="material-symbols-outlined animate-spin text-lg">autorenew</span>
-                  ) : (
-                    <>
-                      <span className="material-symbols-outlined text-lg">verified</span>
-                      <span>निरीक्षण दर्ज करें / Submit Inspection</span>
-                    </>
-                  )}
-                </button>
-              </form>
-            </section>
-
-            {/* FORM 2: Weighbridge Weight Recording (Active when status is INSPECTED) */}
-            <section className="bg-surface-container-lowest rounded-2xl shadow-sm p-6 space-y-5 border border-outline-variant/20">
-              <div className="flex items-center justify-between pb-3 border-b border-outline-variant/20">
-                <div>
-                  <span className="text-xs font-extrabold text-secondary uppercase tracking-wider block">
-                    चरण 2 / Step 2
-                  </span>
-                  <h2 className="text-lg font-bold text-on-surface">वेब्रिज भार दर्ज / Weighbridge Scale Recording</h2>
-                </div>
-                <span className="px-3 py-1 rounded-full bg-secondary-fixed text-on-secondary-fixed text-xs font-extrabold">
-                  {weighbridgeId}
-                </span>
-              </div>
-
-              <form onSubmit={handleWeightSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Gross Weight */}
-                  <div>
-                    <label className="block text-xs font-bold text-on-surface mb-1">
-                      कुल भार / Gross Weight (Qtl)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={grossWeight}
-                      onChange={(e) => setGrossWeight(e.target.value)}
-                      className="w-full h-14 px-3 bg-surface-container-low rounded-xl text-xl font-black text-on-surface outline-none border border-outline-variant/30"
-                      placeholder="62.5"
-                    />
-                  </div>
-
-                  {/* Tare Weight */}
-                  <div>
-                    <label className="block text-xs font-bold text-on-surface mb-1">
-                      खाली वाहन भार / Tare Weight (Qtl)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={tareWeight}
-                      onChange={(e) => setTareWeight(e.target.value)}
-                      className="w-full h-14 px-3 bg-surface-container-low rounded-xl text-xl font-black text-on-surface outline-none border border-outline-variant/30"
-                      placeholder="12.5"
-                    />
-                  </div>
-                </div>
-
-                {/* Net Weight Display */}
-                <div className="bg-primary-fixed rounded-2xl p-5 flex items-center justify-between shadow-sm">
-                  <div>
-                    <span className="text-xs font-extrabold text-on-primary-fixed-variant uppercase block">
-                      शुद्ध वजन / Calculated Net Weight
-                    </span>
-                    <span className="text-3xl font-black text-on-primary-fixed">
-                      {netWeight.toFixed(2)} क्विंटल (Qtl)
-                    </span>
-                  </div>
-                  <span className="material-symbols-outlined text-4xl text-primary">scale</span>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={weightLoading || !selectedBooking}
-                  className="w-full h-14 bg-secondary text-on-secondary font-extrabold rounded-xl text-base shadow-md flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50"
-                >
-                  {weightLoading ? (
-                    <span className="material-symbols-outlined animate-spin text-lg">autorenew</span>
-                  ) : (
-                    <>
-                      <span className="material-symbols-outlined text-xl">print</span>
-                      <span>तौल दर्ज करें व रसीद प्रिंट करें / Record Weight</span>
-                    </>
-                  )}
-                </button>
-              </form>
-            </section>
-
-          </div>
-
+        {/* Tabs */}
+        <div className="flex gap-2">
+          {[['inspection', 'निरीक्षण', 'search'], ['weight', 'तौल', 'scale']].map(([t, label, icon]) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`flex-1 h-12 rounded-xl text-sm font-bold flex items-center justify-center gap-1.5 transition-colors
+                ${tab === t ? 'bg-primary text-on-primary shadow-sm' : 'bg-surface-container-lowest text-on-surface'}`}
+            >
+              <span className="material-symbols-outlined text-base">{icon}</span>
+              {label}
+            </button>
+          ))}
         </div>
 
+        {/* ── INSPECTION TAB ── */}
+        {tab === 'inspection' && (
+          <form onSubmit={handleInspection} className="flex flex-col gap-4">
+            <Field label="ग्रेड / Grade">
+              <div className="grid grid-cols-3 gap-2">
+                {GRADES.map((g) => (
+                  <button
+                    key={g}
+                    type="button"
+                    onClick={() => setGrade(g)}
+                    className={`py-3 rounded-xl text-sm font-bold ${grade === g ? 'bg-primary text-on-primary shadow-sm' : 'bg-surface-container-low text-on-surface'}`}
+                  >
+                    {g}
+                  </button>
+                ))}
+              </div>
+            </Field>
+
+            <Field label="नमी % / Moisture Percentage">
+              <input
+                id="wm-moisture"
+                type="number"
+                step="0.1"
+                min="0"
+                max="100"
+                className="input-field"
+                placeholder="जैसे 12.5"
+                value={moisture}
+                onChange={(e) => setMoisture(e.target.value)}
+              />
+            </Field>
+
+            <Field label="निरीक्षक नोट / Inspector Notes">
+              <textarea
+                id="wm-notes"
+                className="input-field h-24 py-3 resize-none"
+                placeholder="गुणवत्ता टिप्पणी..."
+                value={inspectorNotes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </Field>
+
+            {inspError && (
+              <div className="error-banner" role="alert">
+                <span className="material-symbols-outlined text-lg">error</span>
+                {inspError}
+              </div>
+            )}
+
+            {inspResult && <ResultCard result={inspResult} statusLabel="INSPECTED" />}
+
+            <button
+              id="wm-inspection-submit"
+              type="submit"
+              disabled={inspLoading}
+              className="btn-primary disabled:opacity-60"
+            >
+              {inspLoading
+                ? <><span className="material-symbols-outlined animate-spin">autorenew</span><span>दर्ज हो रहा है...</span></>
+                : <><span className="material-symbols-outlined">search</span><span>निरीक्षण दर्ज करें</span></>
+              }
+            </button>
+          </form>
+        )}
+
+        {/* ── WEIGHT TAB ── */}
+        {tab === 'weight' && (
+          <form onSubmit={handleWeight} className="flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="सकल भार / Gross (Qtl)">
+                <input
+                  id="wm-gross"
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  className="input-field"
+                  placeholder="जैसे 50"
+                  value={grossWeight}
+                  onChange={(e) => setGross(e.target.value)}
+                />
+              </Field>
+
+              <Field label="पेकेजिंग / Tare (Qtl)">
+                <input
+                  id="wm-tare"
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  className="input-field"
+                  placeholder="जैसे 2.5"
+                  value={tareWeight}
+                  onChange={(e) => setTare(e.target.value)}
+                />
+              </Field>
+            </div>
+
+            {/* Net weight preview */}
+            {grossWeight && tareWeight !== '' && (
+              <div className="bg-primary-fixed text-on-primary-fixed rounded-xl px-4 py-3 flex items-center justify-between">
+                <span className="text-sm font-bold">शुद्ध भार / Net Weight</span>
+                <span className="text-xl font-black">
+                  {Math.max(0, Number(grossWeight) - Number(tareWeight)).toFixed(2)} Qtl
+                </span>
+              </div>
+            )}
+
+            <Field label="वेब्रिज ID / Weighbridge ID">
+              <input
+                id="wm-wb-id"
+                type="text"
+                className="input-field"
+                placeholder="जैसे WB-01"
+                value={weighbridgeId}
+                onChange={(e) => setWbId(e.target.value)}
+              />
+            </Field>
+
+            {wtError && (
+              <div className="error-banner" role="alert">
+                <span className="material-symbols-outlined text-lg">error</span>
+                {wtError}
+              </div>
+            )}
+
+            {wtResult && <ResultCard result={wtResult} statusLabel="Weighed — Ready" />}
+
+            <button
+              id="wm-weight-submit"
+              type="submit"
+              disabled={wtLoading}
+              className="btn-primary disabled:opacity-60"
+            >
+              {wtLoading
+                ? <><span className="material-symbols-outlined animate-spin">autorenew</span><span>दर्ज हो रहा है...</span></>
+                : <><span className="material-symbols-outlined">scale</span><span>भार दर्ज करें</span></>
+              }
+            </button>
+          </form>
+        )}
       </div>
     </main>
   );

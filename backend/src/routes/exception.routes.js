@@ -4,6 +4,14 @@ const exceptionController = require('../controllers/exception.controller');
 const { authenticate } = require('../middleware/auth.middleware');
 const { checkRole } = require('../middleware/rbac.middleware');
 
+// List all exceptions with optional ?status= filter (pending_review | resolved)
+router.get(
+  '/',
+  authenticate,
+  checkRole('operator', 'staff', 'supervisor'),
+  exceptionController.getAllExceptions
+);
+
 // Raise exception (staff, operator, supervisor)
 router.post(
   '/',

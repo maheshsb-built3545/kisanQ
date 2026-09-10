@@ -195,6 +195,47 @@ const exceptionService = {
     );
   },
 
+  /**
+   * List all exceptions with optional status filter.
+   *
+   * SCHEMA GAP NOTE — approach taken: map virtual status strings to supervisorOverride boolean.
+   *   ?status=pending_review → supervisorOverride: false  (not yet acted on)
+   *   ?status=resolved       → supervisorOverride: true   (override applied)
+   *   (no ?status)           → return all exceptions
+   *
+   * Decision: DO NOT add a real 'status' field to the Exception schema.
+   * supervisorOverride is the single source of truth. Adding a parallel status
+   * field would create a sync bug every time supervisorOverride is toggled.
+   */
+  getAllExceptions: async (filters = {}) => {
+    const query = {};
+    if (filters.status === 'pending_review') {
+      query.supervisorOverride = false;
+    } else if (filters.status === 'resolved') {
+      query.supervisorOverride = true;
+    }
+    // Any other or missing status → no filter applied (return all)
+
+    try {
+      if (mongoose.connection.readyState === 1) {
+        return await Exception.find(query)
+          .populate('bookingId', 'tokenNumber status crop centreId')
+          .populate('raisedBy', 'name role')
+          .sort({ createdAt: -1 })
+          .lean();
+      }
+    } catch (e) { /* fallback */ }
+
+    // In-memory fallback: filter on the boolean directly
+    let all = Array.from(inMemoryExceptions.values());
+    if (filters.status === 'pending_review') {
+      all = all.filter((ex) => !ex.supervisorOverride);
+    } else if (filters.status === 'resolved') {
+      all = all.filter((ex) => ex.supervisorOverride);
+    }
+    return all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  },
+
   /** Helper for tests */
   _getAuditLogs: () => [...inMemoryAuditLogs]
 };

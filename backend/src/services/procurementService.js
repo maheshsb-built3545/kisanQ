@@ -143,6 +143,87 @@ const procurementService = {
     }
 
     return booking;
+  },
+
+  /**
+   * Update payment status for a weighed/completed booking.
+   * Writes paymentStatus to the Booking document and emits 'queue:update'
+   * to the booking's centreId room so farmer-facing screens refresh live.
+   */
+  updatePaymentStatus: async ({ bookingId, paymentStatus }, io) => {
+    if (!bookingId) {
+      throw new Error('bookingId is required for updating payment status');
+    }
+    if (!paymentStatus) {
+      throw new Error('paymentStatus is required');
+    }
+
+    const VALID_STATUSES = [
+      'procurement_approved',
+      'bill_generated',
+      'payment_file_submitted',
+      'payment_initiated',
+      'payment_confirmed',
+      'status_unavailable'
+    ];
+    if (!VALID_STATUSES.includes(paymentStatus)) {
+      throw new Error(`'${paymentStatus}' is not a valid payment status`);
+    }
+
+    let booking = null;
+    try {
+      if (mongoose.connection.readyState === 1) {
+        booking = await Booking.findById(bookingId);
+      } else if (_inMemoryBookings.has(bookingId.toString())) {
+        booking = _inMemoryBookings.get(bookingId.toString());
+      }
+    } catch (e) {
+      if (_inMemoryBookings.has(bookingId.toString())) {
+        booking = _inMemoryBookings.get(bookingId.toString());
+      }
+    }
+
+    if (!booking) {
+      throw new Error(`Booking with ID '${bookingId}' not found`);
+    }
+
+    if (booking.status === 'CANCELLED') {
+      throw new Error(`Cannot update payment status for booking '${bookingId}' because it is CANCELLED`);
+    }
+
+    const updatePayload = {
+      paymentStatus,
+      updatedAt: new Date()
+    };
+
+    try {
+      if (mongoose.connection.readyState === 1) {
+        booking = await Booking.findByIdAndUpdate(
+          bookingId,
+          updatePayload,
+          { new: true, runValidators: true }
+        );
+      } else {
+        booking = { ...booking, ...updatePayload };
+        _inMemoryBookings.set(bookingId.toString(), booking);
+      }
+    } catch (err) {
+      logger.warn(`Database update fallback for payment status: ${err.message}`);
+      booking = { ...booking, ...updatePayload };
+      _inMemoryBookings.set(bookingId.toString(), booking);
+    }
+
+    // Broadcast live Socket.IO update (emits queue:update to room centre_<centreId>)
+    const targetCentreId = booking.centreId?._id ? booking.centreId._id.toString() : (booking.centreId ? booking.centreId.toString() : null);
+    if (io && targetCentreId) {
+      broadcastQueueUpdate(io, targetCentreId, {
+        bookingId: booking._id || bookingId,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus
+      });
+    }
+
+    return booking;
   }
 };
 

@@ -61,6 +61,19 @@ const exceptionController = {
     } catch (error) {
       return errorResponse(res, error.message, 500);
     }
+  },
+
+  /**
+   * GET /api/exceptions - List all exceptions with optional ?status= filter
+   * status values: 'pending_review' (supervisorOverride=false) | 'resolved' (supervisorOverride=true)
+   */
+  getAllExceptions: async (req, res) => {
+    try {
+      const exceptions = await exceptionService.getAllExceptions(req.query);
+      return successResponse(res, exceptions, 'Exceptions retrieved successfully');
+    } catch (error) {
+      return errorResponse(res, error.message, 500);
+    }
   }
 };
 

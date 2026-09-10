@@ -19,6 +19,15 @@ const procurementController = {
       const statusCode = error.message && error.message.includes('not found') ? 404 : 400;
       return errorResponse(res, error.message, statusCode);
     }
+  },
+  updatePaymentStatus: async (req, res) => {
+    try {
+      const result = await procurementService.updatePaymentStatus(req.body, req.io);
+      return successResponse(res, result, 'Payment status updated successfully', 200);
+    } catch (error) {
+      const statusCode = error.message && error.message.includes('not found') ? 404 : 400;
+      return errorResponse(res, error.message, statusCode);
+    }
   }
 };
 

@@ -22,11 +22,18 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('kq_token');
+      const userRaw = localStorage.getItem('kq_user');
       localStorage.removeItem('kq_user');
-      const isDemoMode = import.meta.env.VITE_DEMO_MODE === 'true';
-      if (isDemoMode) {
-        console.warn('[KisanQ] 401 Unauthorized — VITE_DEMO_MODE active, skipping redirect.');
-      } else {
+      // Route to the correct login page based on the stored user role
+      try {
+        const user = userRaw ? JSON.parse(userRaw) : null;
+        const staffRoles = ['operator', 'staff', 'supervisor', 'district_admin', 'auditor'];
+        if (user?.role && staffRoles.includes(user.role)) {
+          window.location.href = '/staff-login';
+        } else {
+          window.location.href = '/farmer-login';
+        }
+      } catch {
         window.location.href = '/farmer-login';
       }
     }

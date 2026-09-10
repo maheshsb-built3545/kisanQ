@@ -2,163 +2,135 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api';
 
-const STAFF_ROLES = [
-  { id: 'gate_guard',    emoji: '🛡️', label: 'Gate Guard / द्वारपाल',         sub: 'Gate check-in & Queue management',    route: '/guard-terminal' },
-  { id: 'weighmaster',  emoji: '⚖️', label: 'Weighmaster / तौलिया',           sub: 'Weighbridge & Grade verification',    route: '/weighmaster-desk' },
-  { id: 'auctioneer',   emoji: '🔨', label: 'Auctioneer / नीलामकर्ता',        sub: 'Live auction & Hammer operations',    route: '/auction-board' },
-  { id: 'supervisor',   emoji: '👨‍💼', label: 'Supervisor / पर्यवेक्षक',        sub: 'Full access – Exceptions & Overrides', route: '/supervisor-exceptions' },
-  { id: 'district_admin', emoji: '🏛️', label: 'District Admin / जिला अधिकारी', sub: 'Multi-mandi oversight & Reports',    route: '/admin-dashboard' },
-];
+const STAFF_ROLES = ['operator', 'staff', 'supervisor', 'district_admin', 'auditor'];
+
+function roleToRoute(role) {
+  if (['district_admin', 'auditor'].includes(role)) return '/admin-dashboard';
+  // operator, staff, supervisor all go to guard terminal first
+  return '/guard-terminal';
+}
 
 export default function StaffLogin() {
-  const navigate = useNavigate();
-  const [role, setRole] = useState('supervisor');
-  const [employeeId, setEmployeeId] = useState('');
+  const navigate      = useNavigate();
+  const [name, setName]       = useState('');
   const [password, setPassword] = useState('');
-  const [showPw, setShowPw] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [showPwd, setShowPwd]   = useState(false);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
 
-  const handleLogin = async () => {
-    if (!employeeId || !password) { setError('कृपया सभी फ़ील्ड भरें।'); return; }
-    setError(''); setLoading(true);
-    const ROLE_PAYLOAD_MAP = {
-      gate_guard: 'operator',
-      weighmaster: 'staff',
-      auctioneer: 'operator',
-      supervisor: 'supervisor',
-      district_admin: 'district_admin',
-    };
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!name.trim())     { setError('कृपया नाम दर्ज करें।');   return; }
+    if (!password.trim()) { setError('कृपया पासवर्ड दर्ज करें।'); return; }
+    setLoading(true);
     try {
-      const backendRole = ROLE_PAYLOAD_MAP[role] || 'supervisor';
+      // POST /auth/staff/login — fields: name, password ONLY (no role)
       const { data } = await api.post('/auth/staff/login', {
-        name: employeeId,
+        name: name.trim(),
         password,
-        role: backendRole,
       });
-      if (data?.data?.token) {
-        localStorage.setItem('kq_token', data.data.token);
-        if (data?.data?.user) {
-          localStorage.setItem('kq_user', JSON.stringify(data.data.user));
-        }
+      const { token, user } = data.data || data;
+      if (!STAFF_ROLES.includes(user?.role)) {
+        throw new Error(`अज्ञात भूमिका: ${user?.role}. कृपया व्यवस्थापक से संपर्क करें।`);
       }
+      localStorage.setItem('kq_token', token);
+      localStorage.setItem('kq_user', JSON.stringify(user));
+      navigate(roleToRoute(user.role), { replace: true });
     } catch (err) {
-      console.warn('Backend staff login notice (demo fallback active):', err?.response?.data?.message || err?.message);
-      localStorage.setItem('kq_token', 'mock_staff_token');
+      setError(err.response?.data?.message || err.message || 'लॉगिन विफल। नाम या पासवर्ड गलत है।');
+    } finally {
+      setLoading(false);
     }
-    // Route based on selected role
-    const dest = STAFF_ROLES.find((r) => r.id === role)?.route || '/guard-terminal';
-    navigate(dest);
-    setLoading(false);
   };
 
   return (
-    <main className="flex flex-col min-h-screen bg-surface px-4 py-4 font-jakarta">
-      <div className="flex flex-col w-full max-w-md mx-auto gap-4">
+    <main className="flex flex-col min-h-screen bg-surface items-center justify-center px-4 font-jakarta">
+      <div className="w-full max-w-sm flex flex-col gap-6">
 
         {/* Header */}
-        <div className="bg-primary-container rounded-xl p-4 shadow-md">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-xl bg-primary text-on-primary flex items-center justify-center text-2xl font-black shadow-sm">KQ</div>
-            <div>
-              <span className="block text-on-primary-container text-xl font-bold">KisanQ</span>
-              <span className="block text-on-primary-container/70 text-xs uppercase tracking-wider font-extrabold">Staff Management Portal</span>
-            </div>
+        <div className="flex flex-col items-center gap-2 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-secondary text-on-secondary flex items-center justify-center shadow-lg">
+            <span className="material-symbols-outlined text-3xl" style={{ fontVariationSettings: "'FILL' 1" }}>badge</span>
           </div>
-          <div className="flex items-center justify-between mt-2">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-on-primary-container text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>admin_panel_settings</span>
-              <span className="text-sm font-bold text-on-primary-container">Staff Access Only / केवल कर्मचारी</span>
-            </div>
-            <span className="px-2 py-1 bg-primary text-on-primary text-xs font-extrabold rounded-full">SIH26032</span>
-          </div>
+          <h1 className="text-2xl font-black text-on-surface">स्टाफ लॉगिन</h1>
+          <p className="text-sm text-on-surface-variant">Staff Login — Gate / Weighmaster / Supervisor / Admin</p>
         </div>
 
-        {/* Role selector */}
-        <section className="bg-surface-container-lowest rounded-xl shadow-sm p-4">
-          <h2 className="text-sm font-extrabold text-on-surface-variant uppercase mb-3">अपनी भूमिका चुनें / Select Your Role</h2>
-          <div className="space-y-2">
-            {STAFF_ROLES.map((r) => (
-              <label key={r.id} className={`flex items-center gap-4 p-3 rounded-xl cursor-pointer transition-colors ${role === r.id ? 'bg-primary-fixed' : 'bg-surface-container-low hover:bg-surface-container'}`}>
-                <input type="radio" name="role" checked={role === r.id} onChange={() => setRole(r.id)} className="w-5 h-5 text-primary" />
-                <span className="text-2xl">{r.emoji}</span>
-                <div>
-                  <span className={`block text-sm font-bold ${role === r.id ? 'text-on-primary-fixed' : 'text-on-surface'}`}>{r.label}</span>
-                  <span className={`block text-xs ${role === r.id ? 'text-on-primary-fixed-variant' : 'text-on-surface-variant'}`}>{r.sub}</span>
-                </div>
-              </label>
-            ))}
-          </div>
-        </section>
+        {/* Note about role */}
+        <div className="bg-primary-fixed text-on-primary-fixed rounded-xl px-4 py-3 text-xs font-bold flex items-start gap-2">
+          <span className="material-symbols-outlined text-base mt-0.5">info</span>
+          <span>आपकी भूमिका लॉगिन के बाद स्वचालित रूप से पता चलेगी। आपको यहाँ भूमिका चुनने की आवश्यकता नहीं है।</span>
+        </div>
 
-        {/* Credentials */}
-        <section className="bg-surface-container-lowest rounded-xl shadow-sm p-4 space-y-3">
-          <h2 className="text-sm font-extrabold text-on-surface-variant uppercase">लॉगिन विवरण / Login Credentials</h2>
-
-          <div className="space-y-1">
-            <label className="text-sm font-bold text-on-surface">Employee ID / कर्मचारी आईडी</label>
-            <div className="flex items-center gap-2 h-14 bg-surface-container-low rounded-xl px-3">
-              <span className="material-symbols-outlined text-on-surface-variant">badge</span>
-              <input
-                className="flex-1 text-sm font-bold text-on-surface placeholder:text-outline bg-transparent outline-none"
-                placeholder="KQS-2024-001"
-                value={employeeId}
-                onChange={(e) => setEmployeeId(e.target.value)}
-              />
-            </div>
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div>
+            <label className="block text-xs font-extrabold text-on-surface-variant uppercase tracking-wider mb-1.5">
+              नाम / Name
+            </label>
+            <input
+              id="staff-name-input"
+              type="text"
+              className="input-field"
+              placeholder="आपका नाम"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoComplete="username"
+            />
           </div>
 
-          <div className="space-y-1">
-            <label className="text-sm font-bold text-on-surface">पासवर्ड / Password</label>
-            <div className="flex items-center gap-2 h-14 bg-surface-container-low rounded-xl px-3">
-              <span className="material-symbols-outlined text-on-surface-variant">lock</span>
+          <div>
+            <label className="block text-xs font-extrabold text-on-surface-variant uppercase tracking-wider mb-1.5">
+              पासवर्ड / Password
+            </label>
+            <div className="relative">
               <input
-                className="flex-1 text-sm font-bold text-on-surface placeholder:text-outline bg-transparent outline-none"
-                type={showPw ? 'text' : 'password'}
-                placeholder="••••••••"
+                id="staff-password-input"
+                type={showPwd ? 'text' : 'password'}
+                className="input-field pr-12"
+                placeholder="पासवर्ड"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
               />
-              <button onClick={() => setShowPw(!showPw)}>
-                <span className="material-symbols-outlined text-on-surface-variant">{showPw ? 'visibility_off' : 'visibility'}</span>
+              <button
+                type="button"
+                onClick={() => setShowPwd((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant"
+              >
+                <span className="material-symbols-outlined text-xl">{showPwd ? 'visibility_off' : 'visibility'}</span>
               </button>
             </div>
           </div>
 
-          {/* Biometric */}
-          <div className="flex items-center gap-2 bg-secondary-fixed text-on-secondary-fixed rounded-xl p-3 cursor-pointer">
-            <span className="material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>fingerprint</span>
-            <div>
-              <span className="block text-sm font-bold">Biometric Login Available</span>
-              <span className="block text-xs">Fingerprint / Face ID – Touch to authenticate</span>
+          {error && (
+            <div className="error-banner" role="alert">
+              <span className="material-symbols-outlined text-lg">error</span>
+              {error}
             </div>
-          </div>
-        </section>
+          )}
 
-        {error && <p className="text-sm text-error bg-error-container px-3 py-2 rounded-lg">{error}</p>}
+          <button
+            id="staff-login-btn"
+            type="submit"
+            disabled={loading}
+            className="btn-primary bg-secondary disabled:opacity-60"
+          >
+            {loading
+              ? <><span className="material-symbols-outlined animate-spin">autorenew</span><span>लॉगिन हो रहा है...</span></>
+              : <><span className="material-symbols-outlined">login</span><span>लॉगिन करें</span></>
+            }
+          </button>
+        </form>
 
-        <button className="btn-primary" onClick={handleLogin} disabled={loading}>
-          {loading
-            ? <><span className="material-symbols-outlined animate-spin">autorenew</span><span>लॉगिन हो रहा है...</span></>
-            : <><span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>admin_panel_settings</span><span>Staff Login / कर्मचारी लॉगिन</span></>
-          }
+        <button
+          onClick={() => navigate('/')}
+          className="flex items-center justify-center gap-1 text-sm text-on-surface-variant font-bold"
+        >
+          <span className="material-symbols-outlined text-base">arrow_back</span>
+          मुख्य पृष्ठ
         </button>
-
-        {/* Security notice */}
-        <div className="bg-error-container/30 rounded-xl p-4 flex items-start gap-3">
-          <span className="material-symbols-outlined text-error text-xl shrink-0 mt-0.5">security</span>
-          <p className="text-xs text-on-error-container leading-relaxed">
-            यह पोर्टल केवल अधिकृत मंडी कर्मचारियों के लिए है। अनधिकृत पहुंच IPC धारा 66 के अंतर्गत दंडनीय है।
-            <br />
-            <em>This portal is for authorised Mandi staff only.</em>
-          </p>
-        </div>
-
-        {/* Farmer link */}
-        <div className="text-center">
-          <p className="text-sm text-on-surface-variant">किसान हैं? <button onClick={() => navigate('/farmer-login')} className="text-primary font-bold">किसान पोर्टल पर जाएं →</button></p>
-        </div>
-
       </div>
     </main>
   );

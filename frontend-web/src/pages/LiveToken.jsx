@@ -3,64 +3,77 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import api from '../api';
 
-const API_BASE = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
-const POLL_INTERVAL_MS = 10_000; // 10s HTTP fallback when WS disconnected
+const API_BASE       = import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
+const POLL_INTERVAL  = 10_000; // 10s HTTP fallback when WS disconnected
+
+const STATUS_META = {
+  BOOKED:                   { label: 'बुक हुआ',          cls: 'bg-surface-container text-on-surface-variant' },
+  CONFIRMED:                { label: 'पुष्टि हुई',        cls: 'bg-primary-fixed text-on-primary-fixed' },
+  CHECKED_IN:               { label: 'चेक-इन',           cls: 'bg-secondary-fixed text-on-secondary-fixed' },
+  INSPECTED:                { label: 'निरीक्षण हुआ',      cls: 'bg-tertiary-fixed text-on-tertiary-fixed' },
+  WEIGHED_READY_FOR_AUCTION:{ label: 'Weighed — Ready',  cls: 'bg-primary text-on-primary' },
+  ELIGIBLE_FOR_RELEASE:     { label: 'रिलीज़ योग्य',      cls: 'bg-tertiary-container text-on-tertiary-container' },
+  RELEASED:                 { label: 'रिलीज़ हुआ',        cls: 'bg-surface-container-high text-on-surface' },
+  CANCELLED:                { label: 'रद्द',              cls: 'bg-error-container text-on-error-container' },
+  COMPLETED:                { label: 'पूर्ण',             cls: 'bg-secondary-container text-on-secondary-container' },
+};
 
 export default function LiveToken() {
-  const navigate = useNavigate();
-  const { state } = useLocation();
-  const booking = state?.booking;
-  const [tokenData, setTokenData] = useState({
-    token: booking?.tokenNumber || 'KQ-108',
-    farmerId: 'FMR-MH-4521',
-    crop: 'प्याज / Red Onion',
-    qty: '50 क्विंटल',
-    arrival: '08:00 AM - 10:00 AM',
-    position: 14,
-    estimatedWait: 22,
-    status: 'queued',
-    lane: 'Gate No. 2 → Lane B → Weighbridge W3',
-    centreId: booking?.centreId || null,
-  });
-  const [timer, setTimer] = useState(tokenData.estimatedWait * 60);
+  const navigate    = useNavigate();
+  const { state }   = useLocation();
+  const initBooking = state?.booking;
+
+  const [booking, setBooking]       = useState(initBooking || null);
+  const [position, setPosition]     = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [loadError, setLoadError]   = useState('');
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [cancelError, setCancelError]     = useState('');
   const pollRef = useRef(null);
+
+  // ── Initial load: GET /bookings/:id ─────────────────────────────────────
+  useEffect(() => {
+    if (!initBooking?._id) {
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+    api.get(`/bookings/${initBooking._id}`)
+      .then(({ data }) => {
+        const b = data.data || data;
+        setBooking(b);
+      })
+      .catch((err) => {
+        setLoadError(err.response?.data?.message || err.message || 'बुकिंग विवरण लोड नहीं हो सका।');
+      });
+  }, [initBooking, navigate]);
+
+  const centreId = booking?.centreId?._id || booking?.centreId || null;
 
   // ── HTTP polling fallback ─────────────────────────────────────────────────
   const pollPosition = useCallback(async () => {
-    if (!booking?._id || !tokenData.centreId) return;
+    if (!booking?._id || !centreId) return;
     try {
-      const { data } = await api.get(
-        `/queue/${tokenData.centreId}/position/${booking._id}`
-      );
-      if (data?.data) {
-        setTokenData((prev) => ({ ...prev, ...data.data }));
-        setTimer((data.data.estimatedWait || 0) * 60);
-      }
+      const { data } = await api.get(`/queue/${centreId}/position/${booking._id}`);
+      if (data?.data) setPosition(data.data);
     } catch {
-      // Network error during poll — silently retry next tick
+      // Network error during poll — silently retry next tick (this is acceptable:
+      // poll failures don't need to surface since the user can see stale position data)
     }
-  }, [booking, tokenData.centreId]);
+  }, [booking, centreId]);
 
   const startPolling = useCallback(() => {
-    if (pollRef.current) return; // already running
-    pollPosition(); // immediate fetch
-    pollRef.current = setInterval(pollPosition, POLL_INTERVAL_MS);
+    if (pollRef.current) return;
+    pollPosition();
+    pollRef.current = setInterval(pollPosition, POLL_INTERVAL);
   }, [pollPosition]);
 
   const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }, []);
 
-  // ── Socket.IO with automatic fallback ────────────────────────────────────
+  // ── Socket.IO + fallback ─────────────────────────────────────────────────
   useEffect(() => {
-    const timerInterval = setInterval(
-      () => setTimer((t) => (t > 0 ? t - 1 : 0)),
-      1000
-    );
+    if (!centreId) return;
 
     const socket = io(API_BASE, {
       auth: { token: localStorage.getItem('kq_token') },
@@ -70,74 +83,67 @@ export default function LiveToken() {
 
     socket.on('connect', () => {
       setWsConnected(true);
-      stopPolling(); // WS is live — stop HTTP polling
-      if (booking?.centreId) {
-        socket.emit('join_centre_queue', booking.centreId);
-      }
+      stopPolling();
+      socket.emit('join_centre_queue', centreId);
     });
 
     socket.on('disconnect', () => {
       setWsConnected(false);
-      startPolling(); // WS dropped — fall back to HTTP polling
+      startPolling();
     });
 
     socket.on('connect_error', () => {
       setWsConnected(false);
-      startPolling(); // Initial WS failure — fall back immediately
+      startPolling();
     });
 
+    // queue:update may carry full booking data or position data
     socket.on('queue:update', (data) => {
-      if (data) {
-        setTokenData((prev) => ({ ...prev, ...data }));
-        if (data.estimatedWait !== undefined) {
-          setTimer((data.estimatedWait || 0) * 60);
-        }
-      }
+      if (!data) return;
+      // If the update is for our booking, merge into booking state
+      if (data.bookingId && data.bookingId !== booking?._id?.toString()) return;
+      if (data.status)        setBooking((prev) => prev ? { ...prev, ...data } : prev);
+      if (data.position !== undefined) setPosition((prev) => ({ ...prev, ...data }));
     });
 
     return () => {
-      clearInterval(timerInterval);
       stopPolling();
       socket.disconnect();
     };
-  }, [booking, startPolling, stopPolling]);
+  }, [centreId, booking?._id, startPolling, stopPolling]);
 
-  const fmt = (s) =>
-    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-
-  // ── Action handlers ────────────────────────────────────────────────────────────────────────
-  const shareToken = async () => {
-    const text = `📍 KisanQ गेट पास
-तोकन: ${tokenData.token}
-उपज: ${tokenData.crop}
-मात्रा: ${tokenData.qty}
-लान: ${tokenData.lane}
-जानकारी: http://localhost:5173/live-token`;
-    if (navigator.share) {
-      try { await navigator.share({ title: `KisanQ Token ${tokenData.token}`, text }); } catch { /* user cancelled */ }
-    } else {
-      await navigator.clipboard.writeText(text);
-      // Show brief feedback via title flash
-      document.title = '✅ Token Copied!';
-      setTimeout(() => { document.title = 'KisanQ – किसान डिजिटल मंडी पोर्टल'; }, 2000);
+  // ── Cancel ───────────────────────────────────────────────────────────────
+  const handleCancel = async () => {
+    if (!window.confirm('क्या आप वाकई यह बुकिंग रद्द करना चाहते हैं?')) return;
+    setCancelError('');
+    setCancelLoading(true);
+    try {
+      // POST /bookings/:id/cancel
+      await api.post(`/bookings/${booking._id}/cancel`, { reason: 'Farmer initiated cancellation' });
+      setBooking((prev) => prev ? { ...prev, status: 'CANCELLED' } : prev);
+    } catch (err) {
+      setCancelError(err.response?.data?.message || err.message || 'रद्द करने में समस्या हुई।');
+    } finally {
+      setCancelLoading(false);
     }
   };
 
-  const printToken = () => window.print();
-
-  const cancelToken = () => {
-    if (window.confirm('क्या आप वाकई यह निवेदन रद्द करना चाहते हैं?')) {
-      navigate('/mandi-selection');
-    }
+  const fmtWindow = (start, end) => {
+    const opts = { hour: '2-digit', minute: '2-digit', hour12: true };
+    const s = start ? new Date(start).toLocaleTimeString('en-IN', opts) : '—';
+    const e = end   ? new Date(end).toLocaleTimeString('en-IN', opts)   : '—';
+    return `${s} – ${e}`;
   };
 
-  const STATUS_LABEL = {
-    queued:    { label: 'कतार में • In Queue',     cls: 'bg-tertiary-fixed text-on-tertiary-fixed' },
-    called:    { label: 'आपकी बारी • Your Turn!',  cls: 'bg-secondary-fixed text-on-secondary-fixed animate-bounce' },
-    arrived:   { label: 'पहुंच गए • Arrived',       cls: 'bg-primary-fixed text-on-primary-fixed' },
-    completed: { label: 'पूर्ण • Done',              cls: 'bg-surface-container text-on-surface' },
-  };
-  const st = STATUS_LABEL[tokenData.status] || STATUS_LABEL.queued;
+  if (!booking && !loadError) {
+    return (
+      <main className="flex flex-col min-h-screen bg-surface items-center justify-center font-jakarta">
+        <span className="material-symbols-outlined animate-spin text-4xl text-primary">autorenew</span>
+      </main>
+    );
+  }
+
+  const meta = STATUS_META[booking?.status] || STATUS_META.BOOKED;
 
   return (
     <main className="flex flex-col min-h-screen bg-surface px-4 py-4 pb-28 font-jakarta">
@@ -154,168 +160,171 @@ export default function LiveToken() {
           </div>
           <div className="flex items-center gap-2">
             {/* WS connectivity indicator */}
-            <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-extrabold ${wsConnected ? 'bg-secondary-fixed text-on-secondary-fixed' : 'bg-tertiary-fixed text-on-tertiary-fixed'}`}>
-              <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-secondary animate-ping' : 'bg-tertiary-container'}`} />
+            <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-extrabold ${wsConnected ? 'bg-secondary-fixed text-on-secondary-fixed' : 'bg-surface-container text-on-surface-variant'}`}>
+              <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-secondary animate-ping' : 'bg-on-surface-variant'}`} />
               {wsConnected ? 'Live' : 'Polling'}
             </div>
-            <div className={`px-3 py-2 rounded-xl text-sm font-bold ${st.cls}`}>{st.label}</div>
+            <span className={`status-pill ${meta.cls}`}>{meta.label}</span>
           </div>
         </header>
 
-        {/* GATE PASS */}
-        <div className="bg-surface-container-lowest rounded-2xl shadow-xl overflow-hidden">
-          {/* Top banner */}
-          <div className="bg-gradient-to-r from-primary to-primary-container px-5 py-4 flex items-center justify-between">
-            <div>
-              <span className="text-on-primary/70 text-xs font-extrabold uppercase tracking-wider block">लासलगांव कृषि उपज मंडी</span>
-              <span className="text-on-primary text-xl font-bold block">डिजिटल गेट पास</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-on-primary material-symbols-outlined text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
-              <div className="text-right">
-                <span className="text-on-primary/70 text-xs block">Token ID</span>
-                <span className="text-on-primary font-extrabold text-lg tracking-wider">{tokenData.token}</span>
-              </div>
-            </div>
+        {loadError && (
+          <div className="error-banner" role="alert">
+            <span className="material-symbols-outlined text-lg">error</span>
+            {loadError}
           </div>
+        )}
 
-          {/* Dashed divider */}
-          <div className="flex items-center justify-between px-4 py-2">
-            <div className="w-6 h-6 rounded-full bg-surface -ml-8 shadow-inner" />
-            <div className="flex-1 border-dashed border-t border-outline-variant mx-4" />
-            <div className="w-6 h-6 rounded-full bg-surface -mr-8 shadow-inner" />
-          </div>
-
-          {/* Token number big */}
-          <div className="px-5 pt-2 pb-4 flex items-center justify-between">
-            <div className="text-center">
-              <p className="text-xs font-extrabold text-on-surface-variant uppercase tracking-wider">टोकन क्रमांक</p>
-              <p className="text-6xl font-black text-primary leading-none">{tokenData.token.split('-')[1] || tokenData.token}</p>
-              <p className="text-xs text-on-surface-variant mt-1">{tokenData.token}</p>
-            </div>
-            {/* QR placeholder */}
-            <div className="w-28 h-28 bg-on-surface rounded-xl flex items-center justify-center overflow-hidden shadow-md">
-              <svg viewBox="0 0 100 100" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
-                {[0, 1, 2, 3, 4, 5, 6].map((r) =>
-                  [0, 1, 2, 3, 4, 5, 6].map((c) => {
-                    const p = [
-                      [0,0],[0,1],[0,2],[0,3],[0,4],[0,5],[0,6],
-                      [6,0],[6,1],[6,2],[6,3],[6,4],[6,5],[6,6],
-                      [1,0],[2,0],[3,0],[4,0],[5,0],[1,6],[2,6],[3,6],[4,6],[5,6],
-                      [0,6],[6,6],[2,2],[3,2],[4,2],[2,3],[3,3],[4,3],[2,4],[3,4],[4,4],
-                    ];
-                    const on = p.some(([pr, pc]) => pr === r && pc === c) || Math.random() > 0.55;
-                    return on ? (
-                      <rect key={`${r}-${c}`} x={c * 13 + 4} y={r * 13 + 4} width="11" height="11" fill="#faf8ff" />
-                    ) : null;
-                  })
-                )}
-              </svg>
-            </div>
-          </div>
-
-          {/* Farmer info */}
-          <div className="grid grid-cols-2 gap-2 mx-4 mb-4">
-            {[
-              ['किसान ID', tokenData.farmerId],
-              ['उपज', tokenData.crop],
-              ['मात्रा', tokenData.qty],
-              ['आगमन विंडो', tokenData.arrival],
-            ].map(([k, v]) => (
-              <div key={k} className="bg-surface-container-low rounded-xl p-3">
-                <span className="block text-xs text-on-surface-variant">{k}</span>
-                <span className="block text-sm font-bold text-on-surface leading-snug">{v}</span>
-              </div>
-            ))}
-          </div>
-
-          {/* Dashed divider */}
-          <div className="flex items-center justify-between px-4 mb-2">
-            <div className="w-6 h-6 rounded-full bg-surface -ml-8 shadow-inner" />
-            <div className="flex-1 border-dashed border-t border-outline-variant mx-4" />
-            <div className="w-6 h-6 rounded-full bg-surface -mr-8 shadow-inner" />
-          </div>
-
-          {/* Live queue status */}
-          <div className="px-4 pb-4 space-y-3">
-            <div className="flex items-center gap-3 bg-surface-container p-3 rounded-xl">
-              <div className="text-center min-w-[3.5rem] bg-primary-fixed rounded-lg p-2">
-                <span className="block text-3xl font-black text-primary leading-none">{tokenData.position}</span>
-                <span className="block text-[10px] text-on-primary-fixed-variant">कतार में</span>
-              </div>
-              <div className="flex-1">
-                <span className="block text-sm font-bold text-on-surface">आपकी कतार स्थिति</span>
-                <div className="flex items-center gap-1.5 mt-1.5">
-                  {[...Array(Math.min(tokenData.position, 8))].map((_, i) => (
-                    <span
-                      key={i}
-                      className={`flex-1 h-2 rounded-full transition-all ${i < Math.max(0, tokenData.position - 3) ? 'bg-error' : 'bg-tertiary-fixed'}`}
-                    />
-                  ))}
+        {booking && (
+          <>
+            {/* Gate Pass card */}
+            <div className="bg-surface-container-lowest rounded-2xl shadow-xl overflow-hidden">
+              {/* Banner */}
+              <div className="bg-gradient-to-r from-primary to-primary-container px-5 py-4 flex items-center justify-between">
+                <div>
+                  <span className="text-on-primary/70 text-xs font-extrabold uppercase tracking-wider block">
+                    {typeof booking.centreId === 'object' ? booking.centreId?.name : 'मंडी'}
+                  </span>
+                  <span className="text-on-primary text-xl font-bold block">डिजिटल गेट पास</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-on-primary text-2xl" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
+                  <div className="text-right">
+                    <span className="text-on-primary/70 text-xs block">Token ID</span>
+                    <span className="text-on-primary font-extrabold text-lg tracking-wider">{booking.tokenNumber}</span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Countdown */}
-            <div className="flex items-center justify-between bg-surface-container-low p-3 rounded-xl">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-tertiary text-xl">timer</span>
-                <span className="text-sm font-bold text-on-surface">अनुमानित प्रतीक्षा:</span>
+              {/* Dashed divider */}
+              <div className="flex items-center justify-between px-4 py-2">
+                <div className="w-6 h-6 rounded-full bg-surface -ml-8 shadow-inner" />
+                <div className="flex-1 border-dashed border-t border-outline-variant mx-4" />
+                <div className="w-6 h-6 rounded-full bg-surface -mr-8 shadow-inner" />
               </div>
-              <div className="text-right">
-                <span className="block text-xl font-black text-tertiary tabular-nums">{fmt(timer)}</span>
-                <span className="block text-xs text-on-surface-variant">मिनट शेष</span>
+
+              {/* Token number */}
+              <div className="px-5 pt-2 pb-4 flex items-center justify-between">
+                <div className="text-center">
+                  <p className="text-xs font-extrabold text-on-surface-variant uppercase tracking-wider">टोकन क्रमांक</p>
+                  <p className="text-6xl font-black text-primary leading-none">
+                    {booking.tokenNumber?.split('-').pop() || booking.tokenNumber}
+                  </p>
+                  <p className="text-xs text-on-surface-variant mt-1">{booking.tokenNumber}</p>
+                </div>
+                {booking.qrCode ? (
+                  <img src={booking.qrCode} alt="QR" className="w-28 h-28 rounded-xl" />
+                ) : (
+                  <div className="w-28 h-28 bg-on-surface rounded-xl flex items-center justify-center shadow-md">
+                    <span className="material-symbols-outlined text-4xl text-surface-container-low">qr_code</span>
+                  </div>
+                )}
               </div>
-            </div>
 
-            {/* Lane */}
-            <div className="bg-surface-container p-3 rounded-xl flex items-center gap-2">
-              <span className="material-symbols-outlined text-secondary text-xl">fork_right</span>
-              <div>
-                <span className="block text-xs text-on-surface-variant">निर्देशित मार्ग</span>
-                <span className="block text-sm font-bold text-on-surface">{tokenData.lane}</span>
+              {/* Info grid */}
+              <div className="grid grid-cols-2 gap-2 mx-4 mb-4">
+                {[
+                  ['उपज / Crop',   booking.crop || '—'],
+                  ['मात्रा / Qty', booking.quantityBand || '—'],
+                  ['आगमन विंडो',   fmtWindow(booking.arrivalWindowStart, booking.arrivalWindowEnd)],
+                  ['चैनल',         booking.channel || 'app'],
+                ].map(([k, v]) => (
+                  <div key={k} className="bg-surface-container-low rounded-xl p-3">
+                    <span className="block text-xs text-on-surface-variant">{k}</span>
+                    <span className="block text-sm font-bold text-on-surface leading-snug">{v}</span>
+                  </div>
+                ))}
               </div>
-            </div>
-          </div>
-        </div>
 
-        {/* Action buttons */}
-        <div className="grid grid-cols-2 gap-3">
-          <button onClick={() => navigate('/mandi-selection')} className="h-14 bg-surface-container-lowest rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 text-on-surface">
-            <span className="material-symbols-outlined text-xl text-primary">store</span>
-            <span className="text-xs font-bold">दूसरी मंडी</span>
-          </button>
-          <button onClick={shareToken} className="h-14 bg-secondary-fixed rounded-xl flex flex-col items-center justify-center gap-1 text-on-secondary-fixed">
-            <span className="material-symbols-outlined text-xl">share</span>
-            <span className="text-xs font-bold">टोकन शेयर करें</span>
-          </button>
-          <button onClick={printToken} className="h-14 bg-tertiary-fixed rounded-xl flex flex-col items-center justify-center gap-1 text-on-tertiary-fixed">
-            <span className="material-symbols-outlined text-xl">print</span>
-            <span className="text-xs font-bold">प्रिंट / PDF</span>
-          </button>
-          <button onClick={cancelToken} className="h-14 bg-surface-container-lowest rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 text-on-surface">
-            <span className="material-symbols-outlined text-xl text-error">cancel</span>
-            <span className="text-xs font-bold">रद्द करें</span>
-          </button>
-        </div>
+              {/* Inspection / weight data if available */}
+              {(booking.grade || booking.grossWeight) && (
+                <>
+                  <div className="flex items-center justify-between px-4 mb-2">
+                    <div className="w-6 h-6 rounded-full bg-surface -ml-8 shadow-inner" />
+                    <div className="flex-1 border-dashed border-t border-outline-variant mx-4" />
+                    <div className="w-6 h-6 rounded-full bg-surface -mr-8 shadow-inner" />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 mx-4 mb-4">
+                    {booking.grade && (
+                      <div className="bg-surface-container-low rounded-xl p-3">
+                        <span className="block text-xs text-on-surface-variant">ग्रेड</span>
+                        <span className="block text-sm font-black text-on-surface">{booking.grade}</span>
+                      </div>
+                    )}
+                    {booking.grossWeight != null && (
+                      <div className="bg-surface-container-low rounded-xl p-3">
+                        <span className="block text-xs text-on-surface-variant">सकल भार</span>
+                        <span className="block text-sm font-black text-on-surface">{booking.grossWeight} Q</span>
+                      </div>
+                    )}
+                    {booking.netWeight != null && (
+                      <div className="bg-surface-container-low rounded-xl p-3">
+                        <span className="block text-xs text-on-surface-variant">शुद्ध भार</span>
+                        <span className="block text-sm font-black text-on-surface">{booking.netWeight} Q</span>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
 
-        {/* Help */}
-        <div className="bg-surface-container-low rounded-xl p-4 flex items-center justify-between shadow-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-full bg-surface-container-lowest text-primary flex items-center justify-center shadow-sm">
-              <span className="material-symbols-outlined text-lg">support_agent</span>
+              {/* Live position (from queue:update or poll) */}
+              {position?.position != null && (
+                <div className="mx-4 mb-4 bg-surface-container p-3 rounded-xl flex items-center gap-3">
+                  <div className="text-center min-w-[3.5rem] bg-primary-fixed rounded-lg p-2">
+                    <span className="block text-3xl font-black text-primary leading-none">{position.position}</span>
+                    <span className="block text-[10px] text-on-primary-fixed-variant">कतार में</span>
+                  </div>
+                  <div>
+                    <span className="block text-sm font-bold text-on-surface">आपकी कतार स्थिति</span>
+                    {position.estimatedWait != null && (
+                      <span className="block text-xs text-on-surface-variant mt-0.5">
+                        अनुमानित प्रतीक्षा: {position.estimatedWait} मिनट
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-            <div>
-              <span className="block text-xs text-on-surface-variant">किसान सहायता हेल्पलाइन (24x7)</span>
-              <span className="block text-sm font-bold text-on-surface">1800-180-1551 (Toll Free)</span>
-            </div>
-          </div>
-          <a href="tel:18001801551" className="h-10 px-4 bg-primary text-on-primary rounded-lg text-sm font-bold flex items-center gap-1 shadow-sm">
-            <span className="material-symbols-outlined text-base">call</span>
-            Call
-          </a>
-        </div>
 
+            {cancelError && (
+              <div className="error-banner" role="alert">
+                <span className="material-symbols-outlined text-lg">error</span>
+                {cancelError}
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => navigate('/mandi-selection')}
+                className="h-14 bg-surface-container-lowest rounded-xl shadow-sm flex flex-col items-center justify-center gap-1"
+              >
+                <span className="material-symbols-outlined text-xl text-primary">store</span>
+                <span className="text-xs font-bold">दूसरी मंडी</span>
+              </button>
+              <button
+                onClick={() => navigate('/dashboard')}
+                className="h-14 bg-surface-container-lowest rounded-xl shadow-sm flex flex-col items-center justify-center gap-1"
+              >
+                <span className="material-symbols-outlined text-xl text-secondary">dashboard</span>
+                <span className="text-xs font-bold">डैशबोर्ड</span>
+              </button>
+              {['BOOKED','CONFIRMED'].includes(booking.status) && (
+                <button
+                  id="live-token-cancel-btn"
+                  onClick={handleCancel}
+                  disabled={cancelLoading}
+                  className="h-14 col-span-2 bg-error-container text-on-error-container rounded-xl flex items-center justify-center gap-2 font-bold text-sm disabled:opacity-60"
+                >
+                  {cancelLoading
+                    ? <><span className="material-symbols-outlined animate-spin">autorenew</span>रद्द हो रहा है...</>
+                    : <><span className="material-symbols-outlined">cancel</span>बुकिंग रद्द करें</>
+                  }
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Bottom Nav */}
@@ -323,8 +332,7 @@ export default function LiveToken() {
         {[
           ['storefront', 'मंडी', '/mandi-selection', false],
           ['confirmation_number', 'मेरा टोकन', '/live-token', true],
-          ['traffic', 'कतार', '/live-token', false],
-          ['help_outline', 'सहायता', '/farmer-login', false],
+          ['dashboard', 'डैशबोर्ड', '/dashboard', false],
         ].map(([icon, label, path, active]) => (
           <button key={label} onClick={() => navigate(path)} className={`flex flex-col items-center flex-1 py-1 ${active ? 'text-primary' : 'text-on-surface-variant'}`}>
             <div className={active ? 'bg-primary-fixed px-3 py-1 rounded-full mb-0.5' : 'py-1 mb-0.5'}>

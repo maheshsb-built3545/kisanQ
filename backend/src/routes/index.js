@@ -9,6 +9,7 @@ const procurementRoutes = require('./procurementRoutes');
 const exceptionRoutes = require('./exception.routes');
 const notificationRoutes = require('./notification.routes');
 const adminRoutes = require('./admin.routes');
+const auditRoutes = require('./audit.routes');
 
 // Mount modular service routes
 router.use('/auth', authRoutes);
@@ -19,5 +20,6 @@ router.use('/procurement', procurementRoutes);
 router.use('/exceptions', exceptionRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/admin', adminRoutes);
+router.use('/audit', auditRoutes);
 
 module.exports = router;
