@@ -7,6 +7,9 @@ const StaffUser = require('./StaffUser');
 const AuditLog = require('./AuditLog');
 const Notification = require('./Notification');
 const Exception = require('./Exception');
+const Token = require('./Token');
+const CropPrice = require('./CropPrice');
+const FastTrackRequest = require('./FastTrackRequest');
 
 module.exports = {
   Farmer,
@@ -17,5 +20,8 @@ module.exports = {
   StaffUser,
   AuditLog,
   Notification,
-  Exception
+  Exception,
+  Token,
+  CropPrice,
+  FastTrackRequest
 };

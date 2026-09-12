@@ -31,6 +31,24 @@ const authenticate = (req, res, next) => {
   }
 };
 
+const optionalAuthenticate = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      if (token) {
+        const secret = process.env.JWT_SECRET || 'kisanq_jwt_super_secret_key_change_in_production';
+        const decoded = jwt.verify(token, secret);
+        req.user = decoded;
+      }
+    }
+  } catch (e) {
+    // Gracefully ignore optional auth error
+  }
+  next();
+};
+
 module.exports = {
-  authenticate
+  authenticate,
+  optionalAuthenticate
 };

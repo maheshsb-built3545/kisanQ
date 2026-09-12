@@ -24,7 +24,7 @@ router.post(
 router.post(
   '/:id/override',
   authenticate,
-  checkRole('supervisor'),
+  checkRole('supervisor', 'district_admin'),
   exceptionController.supervisorOverride
 );
 

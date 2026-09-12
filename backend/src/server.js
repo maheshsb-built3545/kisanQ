@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const mongoose = require('mongoose');
 const { Server } = require('socket.io');
 const connectDB = require('./config/db');
 const routes = require('./routes');
@@ -15,13 +16,41 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
-// Connect to Database
-connectDB();
+const authService = require('./services/authService');
+const centreService = require('./services/centreService');
+const cropPriceService = require('./services/cropPriceService');
 
-// CORS Configuration
-const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+// Connect to Database & Seed Administrative Staff, Official APMC Centres, and Crop Prices
+connectDB().then(() => {
+  authService.seedStaffRegistry().catch((err) => logger.warn(`Staff seed notice: ${err.message}`));
+  centreService.ensureOfficialCentres().catch((err) => logger.warn(`Centre sync notice: ${err.message}`));
+  cropPriceService.seedCropPrices().catch((err) => logger.warn(`Crop price sync notice: ${err.message}`));
+});
+// Prime in-memory fallbacks immediately
+authService.seedStaffRegistry().catch(() => {});
+centreService.ensureOfficialCentres().catch(() => {});
+cropPriceService.seedCropPrices().catch(() => {});
+
+
+// CORS Configuration - Permissive for dev and Vite frontend ports
+const clientUrl = process.env.CLIENT_URL || 'http://localhost:5185';
+const allowedOrigins = [
+  clientUrl,
+  'http://localhost:5185',
+  'http://127.0.0.1:5185',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3000'
+];
+
 app.use(cors({
-  origin: [clientUrl, 'http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000'],
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, curl, postman) or matching origins
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      return callback(null, true);
+    }
+    return callback(null, true); // Permissive CORS for development & demo
+  },
   credentials: true
 }));
 
@@ -32,7 +61,7 @@ app.use(express.urlencoded({ extended: true }));
 // Initialize Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: [clientUrl, 'http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000'],
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true
   }
@@ -47,10 +76,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check endpoint
+// Health check endpoint with database connection status
 app.get('/api/health', (req, res) => {
+  const isDbConnected = mongoose.connection.readyState === 1;
   res.status(200).json({
-    status: 'online',
+    status: 'ok',
+    database: isDbConnected ? 'connected' : 'disconnected',
+    cluster: isDbConnected ? (mongoose.connection.host || 'MongoDB Atlas') : 'offline_fallback',
     service: 'KisanQ Backend API',
     version: '1.0.0',
     timestamp: new Date().toISOString()

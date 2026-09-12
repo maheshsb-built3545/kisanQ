@@ -5,7 +5,156 @@ const logger = require('../utils/logger');
 // In-memory fallback for centres when DB is in testing/mock mode
 const inMemoryCentres = new Map();
 
+// Official 6 Reference APMC Centres Master Data
+const OFFICIAL_CENTRES = [
+  {
+    _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d1'),
+    code: 'KPG-01',
+    name: 'APMC Kopargaon',
+    nameMarathi: 'कोपरगाव कृषी उत्पन्न बाजार समिती',
+    district: 'Ahilyanagar',
+    locationName: 'Kopargaon, Ahilyanagar',
+    location: {
+      type: 'Point',
+      coordinates: [74.4829, 19.8370] // [lng, lat]
+    },
+    cropsHandled: ['Wheat', 'Soybean', 'Onion', 'Cotton'],
+    workingHours: { start: '08:00', end: '18:00' },
+    capacityConfig: [
+      { crop: 'Wheat', maxDailySlots: 60, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 3, durationMinutes: 30 },
+      { crop: 'Soybean', maxDailySlots: 40, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 2, durationMinutes: 30 }
+    ],
+    currentStatus: 'Green'
+  },
+  {
+    _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d2'),
+    code: 'SRD-02',
+    name: 'APMC Shirdi',
+    nameMarathi: 'शिर्डी कृषी उत्पन्न बाजार समिती',
+    district: 'Ahilyanagar',
+    locationName: 'Shirdi, Ahilyanagar',
+    location: {
+      type: 'Point',
+      coordinates: [74.4754, 19.7668] // [lng, lat]
+    },
+    cropsHandled: ['Wheat', 'Soybean', 'Onion'],
+    workingHours: { start: '08:00', end: '18:00' },
+    capacityConfig: [
+      { crop: 'Wheat', maxDailySlots: 50, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 2, durationMinutes: 30 }
+    ],
+    currentStatus: 'Amber'
+  },
+  {
+    _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d3'),
+    code: 'RHT-03',
+    name: 'APMC Rahata',
+    nameMarathi: 'राहाता कृषी उत्पन्न बाजार समिती',
+    district: 'Ahilyanagar',
+    locationName: 'Rahata, Ahilyanagar',
+    location: {
+      type: 'Point',
+      coordinates: [74.4800, 19.7171] // [lng, lat]
+    },
+    cropsHandled: ['Wheat', 'Cotton', 'Soybean'],
+    workingHours: { start: '08:00', end: '18:00' },
+    capacityConfig: [
+      { crop: 'Wheat', maxDailySlots: 40, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 2, durationMinutes: 30 }
+    ],
+    currentStatus: 'Green'
+  },
+  {
+    _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d4'),
+    code: 'VJP-04',
+    name: 'APMC Vaijapur',
+    nameMarathi: 'वैजापूर कृषी उत्पन्न बाजार समिती',
+    district: 'Chhatrapati Sambhajinagar',
+    locationName: 'Vaijapur, Chhatrapati Sambhajinagar',
+    location: {
+      type: 'Point',
+      coordinates: [74.8332, 19.9489] // [lng, lat]
+    },
+    cropsHandled: ['Onion', 'Wheat', 'Soybean'],
+    workingHours: { start: '08:00', end: '18:00' },
+    capacityConfig: [
+      { crop: 'Onion', maxDailySlots: 50, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 2, durationMinutes: 30 }
+    ],
+    currentStatus: 'Amber'
+  },
+  {
+    _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d5'),
+    code: 'SRP-05',
+    name: 'APMC Shrirampur',
+    nameMarathi: 'श्रीरामपूर कृषी उत्पन्न बाजार समिती',
+    district: 'Ahilyanagar',
+    locationName: 'Shrirampur, Ahilyanagar',
+    location: {
+      type: 'Point',
+      coordinates: [74.7007, 19.6420] // [lng, lat]
+    },
+    cropsHandled: ['Soybean', 'Cotton', 'Wheat'],
+    workingHours: { start: '08:00', end: '18:00' },
+    capacityConfig: [
+      { crop: 'Soybean', maxDailySlots: 45, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 2, durationMinutes: 30 }
+    ],
+    currentStatus: 'Red'
+  },
+  {
+    _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d6'),
+    code: 'LSG-06',
+    name: 'APMC Lasalgaon',
+    nameMarathi: 'लासलगाव कांदा बाजार समिती',
+    district: 'Nashik',
+    locationName: 'Lasalgaon, Niphad, Nashik',
+    location: {
+      type: 'Point',
+      coordinates: [74.2378, 20.1427] // [lng, lat]
+    },
+    cropsHandled: ['Red Onion', 'Wheat', 'Maize'],
+    workingHours: { start: '08:00', end: '18:00' },
+    capacityConfig: [
+      { crop: 'Red Onion', maxDailySlots: 70, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 4, durationMinutes: 20 }
+    ],
+    currentStatus: 'Green'
+  }
+];
+
 const centreService = {
+  /**
+   * Safe migration & upsert ensuring all 6 official APMC centres exist
+   * and purging any legacy placeholder ("Nagpur" / "Central Hub").
+   */
+  ensureOfficialCentres: async () => {
+    // 1. Prime in-memory store
+    OFFICIAL_CENTRES.forEach((c) => {
+      inMemoryCentres.set(c._id.toString(), c);
+      inMemoryCentres.set(c.code, c);
+    });
+
+    if (mongoose.connection.readyState === 1) {
+      try {
+        // 2. Remove legacy placeholder centre if present
+        await Centre.deleteMany({
+          $or: [
+            { name: /Nagpur|Central Hub/i },
+            { name: { $regex: 'APMC Central Hub - Nagpur', $options: 'i' } }
+          ]
+        });
+
+        // 3. Upsert each official centre by unique code
+        for (const centreData of OFFICIAL_CENTRES) {
+          await Centre.findOneAndUpdate(
+            { $or: [{ code: centreData.code }, { name: centreData.name }] },
+            { $set: centreData },
+            { upsert: true, new: true, runValidators: true }
+          );
+        }
+        logger.info(`[Centres] Verified and synchronized all ${OFFICIAL_CENTRES.length} official APMC centres in MongoDB.`);
+      } catch (err) {
+        logger.warn(`[Centres] Sync warning (falling back to memory): ${err.message}`);
+      }
+    }
+  },
+
   /**
    * List all centres with computed live traffic load status (Green / Amber / Red)
    */
@@ -19,57 +168,33 @@ const centreService = {
 
     try {
       if (mongoose.connection.readyState === 1) {
+        // Check if all 6 official codes exist in database
+        const existingCodes = await Centre.distinct('code');
+        const expectedCodes = OFFICIAL_CENTRES.map(c => c.code);
+        const hasAll = expectedCodes.every(code => existingCodes.includes(code));
+
+        if (!hasAll) {
+          await centreService.ensureOfficialCentres();
+        }
+
         centres = await Centre.find(query).lean();
       } else {
-        centres = Array.from(inMemoryCentres.values());
+        if (inMemoryCentres.size === 0) {
+          await centreService.ensureOfficialCentres();
+        }
+        // Extract unique centres by _id from inMemoryCentres map
+        const uniqueMap = new Map();
+        inMemoryCentres.forEach(c => uniqueMap.set(c._id.toString(), c));
+        centres = Array.from(uniqueMap.values());
       }
     } catch (err) {
       logger.warn(`Fallback to memory for centres: ${err.message}`);
-      centres = Array.from(inMemoryCentres.values());
-    }
-
-    // Default seed centre if none exist yet
-    if (centres.length === 0) {
-      const defaultCentre = {
-        _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d1'),
-        name: 'APMC Central Hub - Nagpur',
-        location: {
-          type: 'Point',
-          coordinates: [79.0882, 21.1458] // [lng, lat]
-        },
-        cropsHandled: ['Soybean', 'Cotton', 'Wheat', 'Paddy'],
-        workingHours: { start: '08:00', end: '18:00' },
-        capacityConfig: [
-          {
-            crop: 'Soybean',
-            maxDailySlots: 60,
-            quantityBands: ['0-5q', '5-15q', '15q+'],
-            lanes: 3,
-            durationMinutes: 30
-          },
-          {
-            crop: 'Cotton',
-            maxDailySlots: 40,
-            quantityBands: ['0-5q', '5-15q', '15q+'],
-            lanes: 2,
-            durationMinutes: 30
-          }
-        ],
-        currentStatus: 'Green'
-      };
-
-      try {
-        if (mongoose.connection.readyState === 1) {
-          const created = await Centre.create(defaultCentre);
-          centres = [created.toObject()];
-        } else {
-          inMemoryCentres.set(defaultCentre._id.toString(), defaultCentre);
-          centres = [defaultCentre];
-        }
-      } catch (e) {
-        inMemoryCentres.set(defaultCentre._id.toString(), defaultCentre);
-        centres = [defaultCentre];
+      if (inMemoryCentres.size === 0) {
+        await centreService.ensureOfficialCentres();
       }
+      const uniqueMap = new Map();
+      inMemoryCentres.forEach(c => uniqueMap.set(c._id.toString(), c));
+      centres = Array.from(uniqueMap.values());
     }
 
     // Compute live capacity and load for today

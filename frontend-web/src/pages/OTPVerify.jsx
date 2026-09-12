@@ -1,200 +1,243 @@
-import { useState, useRef, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import api from '../api';
-
-const OTP_LENGTH = 6;
+import React, { useState, useEffect, useRef } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { KeyRound, ArrowLeft, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
+import Button from '../components/common/Button';
 
 export default function OTPVerify() {
-  const navigate      = useNavigate();
-  const { state }     = useLocation();
-  const phone         = state?.phone || '';
-  const name          = state?.name  || '';
-  const initialDevOtp = state?.devOtp ? String(state.devOtp) : '';
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { farmerOtpVerify, farmerOtpRequest, clearFarmerSession } = useAuth();
 
-  const [devOtp, setDevOtp]   = useState(initialDevOtp);
-  const [digits, setDigits]   = useState(() => {
-    if (initialDevOtp && initialDevOtp.length === OTP_LENGTH) {
-      return initialDevOtp.split('');
+  const phone = location.state?.phone || '9876543210';
+  const name = location.state?.name;
+  const preferredLanguage = location.state?.preferredLanguage || 'mr';
+  const initialDevOtp = location.state?.devOtp || '123456';
+  const mode = location.state?.mode || 'login';
+  const passcode = location.state?.passcode;
+
+  const [otp, setOtp] = useState(['1', '2', '3', '4', '5', '6']);
+  const [timer, setTimer] = useState(30);
+  const [canResend, setCanResend] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [devOtpNotice, setDevOtpNotice] = useState('Demo Master OTP: 123456');
+
+  const inputRefs = useRef([]);
+
+  // Ensure clean slate during OTP verification step
+  useEffect(() => {
+    clearFarmerSession();
+  }, [clearFarmerSession]);
+
+  // Auto-fill devOtp if available on test environments
+  useEffect(() => {
+    if (initialDevOtp && initialDevOtp.length === 6) {
+      setOtp(initialDevOtp.split(''));
     }
-    return Array(OTP_LENGTH).fill('');
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState('');
-  const [resendCd, setResendCd] = useState(30);
-  const inputRefs               = useRef([]);
+  }, [initialDevOtp]);
 
-  // Auto-fill digits if devOtp arrives or changes
+  // Countdown timer for OTP resend
   useEffect(() => {
-    if (devOtp && devOtp.length === OTP_LENGTH) {
-      setDigits(devOtp.split(''));
+    let interval = null;
+    if (timer > 0) {
+      interval = setInterval(() => {
+        setTimer((prev) => prev - 1);
+      }, 1000);
+    } else {
+      setCanResend(true);
+      if (interval) clearInterval(interval);
     }
-  }, [devOtp]);
+    return () => clearInterval(interval);
+  }, [timer]);
 
-  // Redirect if landed without phone in state
-  useEffect(() => {
-    if (!phone) navigate('/farmer-login', { replace: true });
-  }, [phone, navigate]);
+  const handleChange = (index, value) => {
+    const digit = value.replace(/\D/g, '').slice(-1);
+    const newOtp = [...otp];
+    newOtp[index] = digit;
+    setOtp(newOtp);
+    setError('');
 
-  // Resend countdown
-  useEffect(() => {
-    if (resendCd <= 0) return;
-    const t = setTimeout(() => setResendCd((c) => c - 1), 1000);
-    return () => clearTimeout(t);
-  }, [resendCd]);
-
-  const otp = digits.join('');
-
-  const handleChange = (i, val) => {
-    const v = val.replace(/\D/g, '').slice(-1);
-    const next = [...digits];
-    next[i] = v;
-    setDigits(next);
-    if (v && i < OTP_LENGTH - 1) inputRefs.current[i + 1]?.focus();
+    // Auto advance to next input
+    if (digit && index < 5) {
+      inputRefs.current[index + 1]?.focus();
+    }
   };
 
-  const handleKeyDown = (i, e) => {
-    if (e.key === 'Backspace' && !digits[i] && i > 0) {
-      inputRefs.current[i - 1]?.focus();
+  const handleKeyDown = (index, e) => {
+    if (e.key === 'Backspace' && !otp[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus();
     }
   };
 
   const handlePaste = (e) => {
-    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH);
-    if (pasted.length === OTP_LENGTH) {
-      setDigits(pasted.split(''));
-      inputRefs.current[OTP_LENGTH - 1]?.focus();
+    e.preventDefault();
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (pasted) {
+      const newOtp = pasted.split('');
+      while (newOtp.length < 6) newOtp.push('');
+      setOtp(newOtp);
+      const nextIndex = Math.min(pasted.length, 5);
+      inputRefs.current[nextIndex]?.focus();
     }
   };
 
-  const handleVerify = async () => {
-    setError('');
-    if (otp.length < OTP_LENGTH) {
-      setError('कृपया 6 अंकों का OTP दर्ज करें।');
+  const handleVerify = async (e) => {
+    if (e) e.preventDefault();
+    const fullOtp = otp.join('');
+    if (fullOtp.length !== 6) {
+      setError('Please enter the full 6-digit OTP');
       return;
     }
-    setLoading(true);
+
     try {
-      // POST /auth/farmer/verify-otp
-      const { data } = await api.post('/auth/farmer/verify-otp', {
+      setIsLoading(true);
+      setError('');
+      await farmerOtpVerify({
         phone,
-        otp,
+        otp: fullOtp,
         name,
-        preferredLanguage: 'mr',
+        preferredLanguage,
         registeredVia: 'app',
+        passcode,
+        mode,
       });
-      const { token, user } = data.data || data;
-      localStorage.setItem('kq_token', token);
-      localStorage.setItem('kq_user', JSON.stringify(user));
-      navigate('/dashboard', { replace: true });
+
+      navigate('/farmer/command-center');
     } catch (err) {
-      setError(err.response?.data?.message || err.message || 'OTP गलत है या समय सीमा समाप्त हो गई।');
-      setDigits(Array(OTP_LENGTH).fill(''));
-      inputRefs.current[0]?.focus();
+      setError(err.response?.data?.message || err.message || 'Invalid or expired OTP. Please try again.');
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
-  const handleResend = async () => {
-    setError('');
-    setResendCd(30);
+  const handleResendOtp = async () => {
+    if (!canResend) return;
     try {
-      const { data } = await api.post('/auth/farmer/request-otp', { phone, name, preferredLanguage: 'mr', registeredVia: 'app' });
-      const newDevOtp = data?.data?.devOtp || data?.devOtp;
+      setIsLoading(true);
+      setError('');
+      const res = await farmerOtpRequest({
+        phone,
+        name,
+        preferredLanguage,
+        registeredVia: 'app',
+        passcode,
+        mode,
+      });
+      const newDevOtp = res?.data?.otp || res?.otp;
       if (newDevOtp) {
-        setDevOtp(String(newDevOtp));
+        setDevOtpNotice(`New Demo OTP: ${newDevOtp}`);
+        setOtp(newDevOtp.split(''));
       }
+      setTimer(30);
+      setCanResend(false);
     } catch (err) {
-      setError(err.response?.data?.message || 'OTP पुनः भेजने में समस्या हुई।');
+      setError(err.response?.data?.message || err.message || 'Failed to resend OTP.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <main className="flex flex-col min-h-screen bg-surface items-center justify-center px-4 font-jakarta">
-      <div className="w-full max-w-sm flex flex-col gap-6">
+    <div className="min-h-screen bg-slate-900/60 flex items-center justify-center p-0 sm:p-4">
+      <div className="max-w-md w-full min-h-screen sm:min-h-0 sm:rounded-3xl bg-slate-950 text-slate-100 shadow-glass-dark border border-slate-800/80 p-6 flex flex-col justify-between relative overflow-hidden">
+        {/* Glow effect */}
+        <div className="absolute top-0 right-0 w-48 h-48 bg-emerald-500/10 blur-[80px] rounded-full pointer-events-none" />
 
-        {/* Header */}
-        <div className="flex flex-col items-center gap-2 text-center">
-          <div className="w-14 h-14 rounded-2xl bg-secondary-fixed text-on-secondary-fixed flex items-center justify-center shadow-lg">
-            <span className="material-symbols-outlined text-3xl" style={{ fontVariationSettings: "'FILL' 1" }}>sms</span>
-          </div>
-          <h1 className="text-2xl font-black text-on-surface">OTP सत्यापन</h1>
-          <p className="text-sm text-on-surface-variant">
-            <span className="font-bold text-on-surface">+91 {phone}</span> पर भेजा गया
-          </p>
-        </div>
-
-        {/* Dev Mode Auto-fill Banner */}
-        {devOtp && (
-          <div className="bg-tertiary-container text-on-tertiary-container px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 border border-tertiary/30 shadow-sm" role="status">
-            <span className="material-symbols-outlined text-base text-tertiary">developer_mode</span>
-            <span>Dev mode: OTP auto-filled — <strong className="font-mono font-black text-sm tracking-wider">{devOtp}</strong></span>
-          </div>
-        )}
-
-        {/* OTP inputs */}
-        <div className="flex gap-2" onPaste={handlePaste}>
-          {digits.map((d, i) => (
-            <input
-              key={i}
-              ref={(el) => (inputRefs.current[i] = el)}
-              id={`otp-box-${i}`}
-              type="tel"
-              inputMode="numeric"
-              maxLength={1}
-              className="otp-box"
-              value={d}
-              onChange={(e) => handleChange(i, e.target.value)}
-              onKeyDown={(e) => handleKeyDown(i, e)}
-              autoFocus={i === 0}
-            />
-          ))}
-        </div>
-
-        {error && (
-          <div className="error-banner" role="alert">
-            <span className="material-symbols-outlined text-lg">error</span>
-            {error}
-          </div>
-        )}
-
-        <button
-          id="otp-verify-btn"
-          onClick={handleVerify}
-          disabled={loading || otp.length < OTP_LENGTH}
-          className="btn-primary disabled:opacity-60"
-        >
-          {loading
-            ? <><span className="material-symbols-outlined animate-spin">autorenew</span><span>सत्यापित हो रहा है...</span></>
-            : <><span className="material-symbols-outlined">verified</span><span>OTP सत्यापित करें</span></>
-          }
-        </button>
-
-        {/* Resend */}
-        <div className="text-center">
-          {resendCd > 0 ? (
-            <p className="text-sm text-on-surface-variant">
-              OTP पुनः भेजें <span className="font-bold text-on-surface">{resendCd}s</span> में
-            </p>
-          ) : (
-            <button
-              id="otp-resend-btn"
-              onClick={handleResend}
-              className="text-sm font-bold text-primary underline"
+        <div>
+          {/* Back button */}
+          <div className="flex items-center justify-between mb-6">
+            <Link
+              to="/farmer-login"
+              className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
             >
-              OTP पुनः भेजें
-            </button>
+              <ArrowLeft className="w-4 h-4" />
+              <span>बदला / Change Number</span>
+            </Link>
+          </div>
+
+          <div className="mb-6 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3">
+              <KeyRound className="w-6 h-6" />
+            </div>
+            <h1 className="text-2xl font-bold text-white mb-1">ओटीपी पडताळणी / Verify OTP</h1>
+            <p className="text-xs text-slate-400">
+              Enter the 6-digit verification code sent to <br />
+              <span className="font-semibold text-emerald-400">+91 {phone}</span>
+            </p>
+          </div>
+
+          {/* Dev OTP Helper Banner */}
+          {devOtpNotice && (
+            <div className="mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span>{devOtpNotice} (Auto-filled for testing)</span>
+            </div>
           )}
+
+          {/* 6 Digit OTP Inputs */}
+          <form onSubmit={handleVerify} className="space-y-6">
+            <div className="flex justify-between gap-2 my-4" onPaste={handlePaste}>
+              {otp.map((digit, idx) => (
+                <input
+                  key={idx}
+                  ref={(el) => (inputRefs.current[idx] = el)}
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={1}
+                  value={digit}
+                  onChange={(e) => handleChange(idx, e.target.value)}
+                  onKeyDown={(e) => handleKeyDown(idx, e)}
+                  className={`w-12 h-14 text-center text-xl font-bold rounded-xl bg-slate-950/80 border ${
+                    error ? 'border-rose-500' : digit ? 'border-emerald-500 text-emerald-300 ring-2 ring-emerald-500/20' : 'border-slate-800 text-slate-100'
+                  } focus:outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/30 transition-all`}
+                />
+              ))}
+            </div>
+
+            {error && (
+              <p className="text-xs text-rose-400 font-medium text-center flex items-center justify-center gap-1">
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span>{error}</span>
+              </p>
+            )}
+
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              className="w-full"
+              isLoading={isLoading}
+              disabled={otp.join('').length !== 6}
+            >
+              Verify & Enter Mandi / पडताळणी करा
+            </Button>
+          </form>
+
+          {/* Resend Timer */}
+          <div className="mt-6 text-center">
+            {canResend ? (
+              <button
+                type="button"
+                onClick={handleResendOtp}
+                className="text-xs text-emerald-400 font-semibold hover:underline inline-flex items-center gap-1.5"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>पुन्हा पाठवा / Resend OTP</span>
+              </button>
+            ) : (
+              <p className="text-xs text-slate-500">
+                Resend code in <span className="font-semibold text-slate-300">{timer}s</span>
+              </p>
+            )}
+          </div>
         </div>
 
-        <button
-          onClick={() => navigate('/farmer-login')}
-          className="flex items-center justify-center gap-1 text-sm text-on-surface-variant font-bold"
-        >
-          <span className="material-symbols-outlined text-base">arrow_back</span>
-          नंबर बदलें
-        </button>
+        {/* Footer info */}
+        <div className="mt-8 pt-4 border-t border-slate-900 text-center text-[11px] text-slate-500">
+          Having trouble? Ask the mandi gate operator for assisted check-in.
+        </div>
       </div>
-    </main>
+    </div>
   );
 }

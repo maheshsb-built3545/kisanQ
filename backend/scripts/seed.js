@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const dns = require('dns');
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+
+try {
+  dns.setDefaultResultOrder('ipv4first');
+  dns.setServers(['8.8.8.8', '1.1.1.1']);
+} catch (e) {}
 
 const Centre = require('../src/models/Centre');
 const StaffUser = require('../src/models/StaffUser');
@@ -9,78 +15,111 @@ const Farmer = require('../src/models/Farmer');
 const SEED_CENTRES = [
   {
     _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d1'),
-    name: 'लासलगांव कृषि उपज मंडी (Lasalgaon APMC)',
+    code: 'KPG-01',
+    name: 'APMC Kopargaon',
+    nameMarathi: 'कोपरगाव कृषी उत्पन्न बाजार समिती',
+    district: 'Ahilyanagar',
+    locationName: 'Kopargaon, Ahilyanagar',
     location: {
       type: 'Point',
-      coordinates: [74.2294, 20.1478]
+      coordinates: [74.4829, 19.8370]
     },
-    cropsHandled: ['Red Onion', 'Sharbati Wheat', 'Yellow Maize'],
-    workingHours: {
-      start: '08:00',
-      end: '18:00'
-    },
+    cropsHandled: ['Wheat', 'Soybean', 'Onion', 'Cotton'],
+    workingHours: { start: '08:00', end: '18:00' },
     currentStatus: 'Green',
     capacityConfig: [
-      {
-        crop: 'Red Onion',
-        maxDailySlots: 60,
-        quantityBands: ['0-5q', '5-15q', '15q+'],
-        lanes: 4,
-        durationMinutes: 20
-      },
-      {
-        crop: 'Sharbati Wheat',
-        maxDailySlots: 40,
-        quantityBands: ['0-5q', '5-15q', '15q+'],
-        lanes: 2,
-        durationMinutes: 30
-      }
+      { crop: 'Wheat', maxDailySlots: 60, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 3, durationMinutes: 30 },
+      { crop: 'Soybean', maxDailySlots: 40, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 2, durationMinutes: 30 }
     ]
   },
   {
     _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d2'),
-    name: 'पिंपलगांव बसवंत मंडी (Pimpalgaon Baswant APMC)',
+    code: 'SRD-02',
+    name: 'APMC Shirdi',
+    nameMarathi: 'शिर्डी कृषी उत्पन्न बाजार समिती',
+    district: 'Ahilyanagar',
+    locationName: 'Shirdi, Ahilyanagar',
     location: {
       type: 'Point',
-      coordinates: [73.9856, 20.1692]
+      coordinates: [74.4754, 19.7668]
     },
-    cropsHandled: ['Tomato', 'Grapes', 'Soybean'],
-    workingHours: {
-      start: '08:00',
-      end: '18:00'
-    },
+    cropsHandled: ['Wheat', 'Soybean', 'Onion'],
+    workingHours: { start: '08:00', end: '18:00' },
     currentStatus: 'Amber',
     capacityConfig: [
-      {
-        crop: 'Tomato',
-        maxDailySlots: 35,
-        quantityBands: ['0-5q', '5-15q', '15q+'],
-        lanes: 2,
-        durationMinutes: 25
-      }
+      { crop: 'Wheat', maxDailySlots: 50, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 2, durationMinutes: 30 }
     ]
   },
   {
     _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d3'),
-    name: 'नासिक मुख्य मंडी (Nashik Main APMC Yard)',
+    code: 'RHT-03',
+    name: 'APMC Rahata',
+    nameMarathi: 'राहाता कृषी उत्पन्न बाजार समिती',
+    district: 'Ahilyanagar',
+    locationName: 'Rahata, Ahilyanagar',
     location: {
       type: 'Point',
-      coordinates: [73.7900, 20.0000]
+      coordinates: [74.4800, 19.7171]
     },
-    cropsHandled: ['Sharbati Wheat', 'Yellow Maize', 'Soybean'],
-    workingHours: {
-      start: '08:00',
-      end: '18:00'
+    cropsHandled: ['Wheat', 'Cotton', 'Soybean'],
+    workingHours: { start: '08:00', end: '18:00' },
+    currentStatus: 'Green',
+    capacityConfig: [
+      { crop: 'Wheat', maxDailySlots: 40, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 2, durationMinutes: 30 }
+    ]
+  },
+  {
+    _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d4'),
+    code: 'VJP-04',
+    name: 'APMC Vaijapur',
+    nameMarathi: 'वैजापूर कृषी उत्पन्न बाजार समिती',
+    district: 'Chhatrapati Sambhajinagar',
+    locationName: 'Vaijapur, Chhatrapati Sambhajinagar',
+    location: {
+      type: 'Point',
+      coordinates: [74.8332, 19.9489]
     },
+    cropsHandled: ['Onion', 'Wheat', 'Soybean'],
+    workingHours: { start: '08:00', end: '18:00' },
+    currentStatus: 'Amber',
+    capacityConfig: [
+      { crop: 'Onion', maxDailySlots: 50, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 2, durationMinutes: 30 }
+    ]
+  },
+  {
+    _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d5'),
+    code: 'SRP-05',
+    name: 'APMC Shrirampur',
+    nameMarathi: 'श्रीरामपूर कृषी उत्पन्न बाजार समिती',
+    district: 'Ahilyanagar',
+    locationName: 'Shrirampur, Ahilyanagar',
+    location: {
+      type: 'Point',
+      coordinates: [74.7007, 19.6420]
+    },
+    cropsHandled: ['Soybean', 'Cotton', 'Wheat'],
+    workingHours: { start: '08:00', end: '18:00' },
     currentStatus: 'Red',
     capacityConfig: [
-      {
-        crop: 'Sharbati Wheat',
-        maxDailySlots: 20,
-        quantityBands: ['0-5q', '5-15q', '15q+'],
-        lanes: 1,
-        durationMinutes: 40
-      }
+      { crop: 'Soybean', maxDailySlots: 45, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 2, durationMinutes: 30 }
+    ]
+  },
+  {
+    _id: new mongoose.Types.ObjectId('65f1a2b3c4d5e6f7a8b9c0d6'),
+    code: 'LSG-06',
+    name: 'APMC Lasalgaon',
+    nameMarathi: 'लासलगाव कांदा बाजार समिती',
+    district: 'Nashik',
+    locationName: 'Lasalgaon, Niphad, Nashik',
+    location: {
+      type: 'Point',
+      coordinates: [74.2378, 20.1427]
+    },
+    cropsHandled: ['Red Onion', 'Wheat', 'Maize'],
+    workingHours: { start: '08:00', end: '18:00' },
+    currentStatus: 'Green',
+    capacityConfig: [
+      { crop: 'Red Onion', maxDailySlots: 70, quantityBands: ['0-5q', '5-15q', '15q+'], lanes: 4, durationMinutes: 20 }
     ]
   }
 ];

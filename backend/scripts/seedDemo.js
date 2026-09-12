@@ -18,6 +18,12 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') }
 
 const mongoose = require('mongoose');
 const bcrypt   = require('bcryptjs');
+const dns      = require('dns');
+
+try {
+  dns.setDefaultResultOrder('ipv4first');
+  dns.setServers(['8.8.8.8', '1.1.1.1']);
+} catch (e) {}
 
 const {
   Centre, Booking, Farmer, StaffUser, Exception, AuditLog

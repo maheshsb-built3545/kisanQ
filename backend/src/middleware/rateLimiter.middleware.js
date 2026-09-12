@@ -4,9 +4,11 @@ const rateLimit = require('express-rate-limit');
  * OTP Request Rate Limiter
  * Maximum 5 OTP requests per 15 minutes per IP
  */
+const isDevOrTest = process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+
 const otpRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 10 OTP requests per window
+  max: isDevOrTest ? 500 : 10,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -16,13 +18,9 @@ const otpRateLimiter = rateLimit({
   }
 });
 
-/**
- * Staff Login Rate Limiter
- * Maximum 10 login attempts per 15 minutes per IP
- */
 const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 15,
+  max: isDevOrTest ? 500 : 15,
   standardHeaders: true,
   legacyHeaders: false,
   message: {

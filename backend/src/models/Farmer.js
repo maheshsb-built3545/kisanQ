@@ -29,17 +29,87 @@ const farmerSchema = new mongoose.Schema(
     registeredVia: {
       type: String,
       enum: {
-        values: ['app', 'assisted'],
+        values: ['app', 'assisted', 'manual_admin'],
         message: '{VALUE} is not a valid registration channel'
       },
       default: 'app'
-    }
+    },
+    village: {
+      type: String,
+      default: 'Kopargaon',
+      trim: true
+    },
+    crop: {
+      type: String,
+      default: 'Wheat',
+      trim: true
+    },
+    landArea: {
+      type: Number,
+      default: 2.5,
+      min: 0.1
+    },
+    district: {
+      type: String,
+      default: 'Ahmednagar',
+      trim: true
+    },
+    state: {
+      type: String,
+      default: 'Maharashtra',
+      trim: true
+    },
+    passcodeHash: {
+      type: String,
+      trim: true
+    },
+    kisanId: {
+      type: String,
+      trim: true
+    },
+    pendingDues: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    pickupLocation: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number] // [longitude, latitude]
+      },
+      address: {
+        type: String,
+        trim: true
+      }
+    },
+    cancellationHistory: [
+      {
+        tokenNumber: { type: String, trim: true },
+        mandiName: { type: String, trim: true },
+        cancelledAt: { type: Date, default: Date.now },
+        penaltyAmount: { type: Number, default: 0 },
+        reason: { type: String, trim: true },
+        status: {
+          type: String,
+          enum: ['DUE', 'DEDUCTED', 'WAIVED'],
+          default: 'DUE'
+        }
+      }
+    ]
   },
   {
     timestamps: true
   }
 );
 
+// Geospatial 2dsphere index for proximity / pickup location queries
+farmerSchema.index({ pickupLocation: '2dsphere' });
+
 const Farmer = mongoose.model('Farmer', farmerSchema);
 
 module.exports = Farmer;
+

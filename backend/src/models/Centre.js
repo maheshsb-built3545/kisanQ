@@ -45,6 +45,22 @@ const centreSchema = new mongoose.Schema(
       required: [true, 'Procurement centre name is required'],
       trim: true
     },
+    code: {
+      type: String,
+      trim: true
+    },
+    nameMarathi: {
+      type: String,
+      trim: true
+    },
+    district: {
+      type: String,
+      trim: true
+    },
+    locationName: {
+      type: String,
+      trim: true
+    },
     location: {
       type: {
         type: String,

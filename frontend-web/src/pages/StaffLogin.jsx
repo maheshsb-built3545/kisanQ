@@ -1,137 +1,615 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import api from '../api';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import GovHeader from '../components/common/GovHeader';
+import {
+  ShieldCheck, Lock, User, ArrowRight, Sprout, Sparkles,
+  Building2, Scale, Leaf, Banknote, ShieldAlert, CheckCircle2,
+  ChevronRight, BadgeCheck, Activity, Truck, Cpu, Radio,
+  Layers, MapPin, Gauge, KeyRound, AlertTriangle, Fingerprint,
+  RefreshCw, CheckCircle, Shield, ArrowUpRight, ArrowLeft, Clock
+} from 'lucide-react';
+import { MANDIS } from '../services/storageService';
 
-const STAFF_ROLES = ['operator', 'staff', 'supervisor', 'district_admin', 'auditor'];
+// ─── Live Regional Telemetry ─────────────────────────────────────────────────
+const REGIONAL_HEALTH_METRICS = [
+  {
+    mandiId: 'KPG-01',
+    mandiName: 'APMC Kopargaon',
+    code: 'MH-KPG-01',
+    status: 'High Volume',
+    trucksInYard: 42,
+    gateVelocity: '3.8 min/truck',
+    scaleStatus: 'Weighbridge Calibrated',
+    loadPercentage: 85,
+  },
+  {
+    mandiId: 'SRD-02',
+    mandiName: 'APMC Shirdi',
+    code: 'MH-SRD-02',
+    status: 'Optimal Flow',
+    trucksInYard: 18,
+    gateVelocity: '2.9 min/truck',
+    scaleStatus: 'Weighbridge Calibrated',
+    loadPercentage: 45,
+  },
+  {
+    mandiId: 'RHT-03',
+    mandiName: 'APMC Rahata',
+    code: 'MH-RHT-03',
+    status: 'Normal Intake',
+    trucksInYard: 12,
+    gateVelocity: '3.1 min/truck',
+    scaleStatus: 'Pitless Scale Active',
+    loadPercentage: 20,
+  },
+  {
+    mandiId: 'VJP-04',
+    mandiName: 'APMC Vaijapur',
+    code: 'MH-VJP-04',
+    status: 'Active Intake',
+    trucksInYard: 48,
+    gateVelocity: '4.5 min/truck',
+    scaleStatus: 'Scales 1 & 2 Active',
+    loadPercentage: 90,
+  },
+  {
+    mandiId: 'SRP-05',
+    mandiName: 'APMC Shrirampur',
+    code: 'MH-SRP-05',
+    status: 'Optimal Flow',
+    trucksInYard: 22,
+    gateVelocity: '3.4 min/truck',
+    scaleStatus: 'Weighbridge Calibrated',
+    loadPercentage: 55,
+  },
+];
 
-function roleToRoute(role) {
-  if (['district_admin', 'auditor'].includes(role)) return '/admin-dashboard';
-  // operator, staff, supervisor all go to guard terminal first
-  return '/guard-terminal';
-}
+// ─── Station Roles ───────────────────────────────────────────────────────────
+const PHYSICAL_STATION_ROLES = [
+  {
+    id: 'security_gate',
+    roleLabel: 'Desk 1: Security Gate',
+    officerName: 'Ramesh Shinde',
+    officerPhone: '9800000001',
+    officerCode: 'SEC-D1-KPG',
+    icon: ShieldCheck,
+    deskName: 'Gate Check-In & ANPR Intake',
+    terminalLane: 'Gate 01 - North Boom Barrier',
+    terminalCode: 'GATE-01-NBR',
+    description: 'Scans QR passes, manages live yard intake & boom barrier release',
+  },
+  {
+    id: 'quality_assayer',
+    roleLabel: 'Desk 2: Quality Lab',
+    officerName: 'S. Patil',
+    officerPhone: '9800000002',
+    officerCode: 'QA-SP-KPG',
+    icon: Leaf,
+    deskName: 'Assaying Lab #2 (NIR Moisture)',
+    terminalLane: 'Assaying Lab #2',
+    terminalCode: 'LAB-02-NIR',
+    description: 'Inspects moisture, foreign matter, applies FAQ Grade A/B/C',
+  },
+  {
+    id: 'weighmaster',
+    roleLabel: 'Desk 3: Weighbridge',
+    officerName: 'Suresh Jadhav',
+    officerPhone: '9800000003',
+    officerCode: 'WM-02-KPG',
+    icon: Scale,
+    deskName: 'Pitless Electronic Weighbridge #1',
+    terminalLane: 'Pitless Weighbridge #1 (60 MT)',
+    terminalCode: 'WB-01-60MT',
+    description: 'Direct load-cell telemetry reading, gross & tare lock, auto net weight',
+  },
+  {
+    id: 'procurement',
+    roleLabel: 'Desk 4: Procurement',
+    officerName: 'Secretary Deshmukh',
+    officerPhone: '9800000004',
+    officerCode: 'SEC-APMC-KPG',
+    icon: Building2,
+    deskName: 'APMC Secretary Procurement Terminal',
+    terminalLane: 'APMC Secretary Terminal',
+    terminalCode: 'SEC-PROC-01',
+    description: 'Generates purchase order bill, confirms statutory rates & weights',
+  },
+  {
+    id: 'accounts_settlement',
+    roleLabel: 'Desk 5: Treasury & DBT',
+    officerName: 'Treasurer Deshmukh',
+    officerPhone: '9800000005',
+    officerCode: 'TRY-DBT-KPG',
+    icon: Banknote,
+    deskName: 'Treasury & PFMS/DBT Settlement Desk',
+    terminalLane: 'Accounts & DBT Payout Desk',
+    terminalCode: 'TRY-DBT-DESK',
+    description: 'Automatic penalty recovery, net DBT bank payout disbursement',
+  },
+];
 
 export default function StaffLogin() {
-  const navigate      = useNavigate();
-  const [name, setName]       = useState('');
-  const [password, setPassword] = useState('');
-  const [showPwd, setShowPwd]   = useState(false);
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState('');
+  const navigate = useNavigate();
+  const { staffVerifyCredentials, staffVerifyOtp } = useAuth();
 
-  const handleSubmit = async (e) => {
+  // Selected Center & Station
+  const [selectedMandiId, setSelectedMandiId] = useState('KPG-01');
+  const [selectedStation, setSelectedStation] = useState(PHYSICAL_STATION_ROLES[0]);
+  
+  // 2FA Pipeline State (Step 1: Credentials -> Step 2: OTP Challenge)
+  const [authStep, setAuthStep] = useState(1);
+  const [challengeToken, setChallengeToken] = useState('');
+  const [maskedMobile, setMaskedMobile] = useState('');
+  const [otpSecondsLeft, setOtpSecondsLeft] = useState(120);
+
+  // Form Input State
+  const [officerPhone, setOfficerPhone] = useState('9800000001');
+  const [username, setUsername] = useState('Ramesh Shinde');
+  const [password, setPassword] = useState('Staff@KisanQ2026');
+  const [otp, setOtp] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  // Selected Mandi Object
+  const selectedMandi = useMemo(() => {
+    return MANDIS.find((m) => m.id === selectedMandiId) || MANDIS[0];
+  }, [selectedMandiId]);
+
+  // Selected Mandi Telemetry
+  const activeTelemetry = useMemo(() => {
+    return REGIONAL_HEALTH_METRICS.find((m) => m.mandiId === selectedMandiId) || REGIONAL_HEALTH_METRICS[0];
+  }, [selectedMandiId]);
+
+  // Countdown timer for 2FA OTP Challenge
+  useEffect(() => {
+    let timer;
+    if (authStep === 2 && otpSecondsLeft > 0) {
+      timer = setInterval(() => {
+        setOtpSecondsLeft((prev) => prev - 1);
+      }, 1000);
+    } else if (authStep === 2 && otpSecondsLeft === 0) {
+      setError('2FA verification session expired. Please re-enter your credentials.');
+    }
+    return () => clearInterval(timer);
+  }, [authStep, otpSecondsLeft]);
+
+  // Handle Station Role Selection
+  const handleStationSelect = (station) => {
+    setSelectedStation(station);
+    setUsername(station.officerName);
+    setOfficerPhone(station.officerPhone || '9800000001');
+    setError('');
+    if (authStep === 2) {
+      setAuthStep(1);
+      setChallengeToken('');
+      setOtp('');
+    }
+  };
+
+  // Step 1: Submit Credentials & Request 2FA Challenge
+  const handleVerifyCredentials = async (e) => {
     e.preventDefault();
     setError('');
-    if (!name.trim())     { setError('कृपया नाम दर्ज करें।');   return; }
-    if (!password.trim()) { setError('कृपया पासवर्ड दर्ज करें।'); return; }
-    setLoading(true);
+
+    if (!officerPhone || officerPhone.length !== 10) {
+      setError('Please provide a valid 10-digit officer mobile number');
+      return;
+    }
+    if (!password) {
+      setError('Please enter your staff password / security PIN');
+      return;
+    }
+
+    setIsLoading(true);
     try {
-      // POST /auth/staff/login — fields: name, password ONLY (no role)
-      const { data } = await api.post('/auth/staff/login', {
-        name: name.trim(),
-        password,
+      const res = await staffVerifyCredentials({
+        mobileNumber: officerPhone.trim(),
+        phone: officerPhone.trim(),
+        password: password.trim(),
+        role: selectedStation.id,
       });
-      const { token, user } = data.data || data;
-      if (!STAFF_ROLES.includes(user?.role)) {
-        throw new Error(`अज्ञात भूमिका: ${user?.role}. कृपया व्यवस्थापक से संपर्क करें।`);
+
+      if (res?.data?.challengeToken || res?.challengeToken) {
+        const token = res?.data?.challengeToken || res?.challengeToken;
+        const masked = res?.data?.maskedMobile || res?.maskedMobile || `+91 ******${officerPhone.slice(-4)}`;
+        setChallengeToken(token);
+        setMaskedMobile(masked);
+        setAuthStep(2);
+        setOtpSecondsLeft(120);
+        setOtp('');
+      } else {
+        setError('Authentication challenge could not be initialized.');
       }
-      localStorage.setItem('kq_token', token);
-      localStorage.setItem('kq_user', JSON.stringify(user));
-      navigate(roleToRoute(user.role), { replace: true });
     } catch (err) {
-      setError(err.response?.data?.message || err.message || 'लॉगिन विफल। नाम या पासवर्ड गलत है।');
+      const msg = err.response?.data?.message || err.message || 'Invalid credentials or role mismatch';
+      setError(msg);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
+    }
+  };
+
+  // Step 2: Submit 6-digit OTP to complete authentication
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    setError('');
+
+    const cleanOtp = otp.trim();
+    if (!cleanOtp || cleanOtp.length !== 6) {
+      setError('Please enter the 6-digit verification code');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const res = await staffVerifyOtp({
+        challengeToken,
+        otp: cleanOtp,
+      });
+
+      if (res?.data?.token || res?.token) {
+        navigate('/admin-dashboard/desk');
+      } else {
+        setError('Session token could not be generated.');
+      }
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message || 'Invalid or expired OTP code';
+      setError(msg);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <main className="flex flex-col min-h-screen bg-surface items-center justify-center px-4 font-jakarta">
-      <div className="w-full max-w-sm flex flex-col gap-6">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-emerald-600 selection:text-white">
+      {/* ── Modern Navbar ────────────────────────────────────────── */}
+      <GovHeader
+        portalType="staff"
+        activeMandi={selectedMandi}
+        onMandiChange={setSelectedMandiId}
+        showPortalSwitch={true}
+      />
 
-        {/* Header */}
-        <div className="flex flex-col items-center gap-2 text-center">
-          <div className="w-14 h-14 rounded-2xl bg-secondary text-on-secondary flex items-center justify-center shadow-lg">
-            <span className="material-symbols-outlined text-3xl" style={{ fontVariationSettings: "'FILL' 1" }}>badge</span>
-          </div>
-          <h1 className="text-2xl font-black text-on-surface">स्टाफ लॉगिन</h1>
-          <p className="text-sm text-on-surface-variant">Staff Login — Gate / Weighmaster / Supervisor / Admin</p>
-        </div>
-
-        {/* Note about role */}
-        <div className="bg-primary-fixed text-on-primary-fixed rounded-xl px-4 py-3 text-xs font-bold flex items-start gap-2">
-          <span className="material-symbols-outlined text-base mt-0.5">info</span>
-          <span>आपकी भूमिका लॉगिन के बाद स्वचालित रूप से पता चलेगी। आपको यहाँ भूमिका चुनने की आवश्यकता नहीं है।</span>
-        </div>
-
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      {/* ── Main Content Area ────────────────────────────────────── */}
+      <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 sm:py-12 flex-1">
+        
+        {/* Header Section */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
           <div>
-            <label className="block text-xs font-extrabold text-on-surface-variant uppercase tracking-wider mb-1.5">
-              नाम / Name
-            </label>
-            <input
-              id="staff-name-input"
-              type="text"
-              className="input-field"
-              placeholder="आपका नाम"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoComplete="username"
-            />
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold mb-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span>APMC Mandi Operations Desk</span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+              Operational Terminal Access
+            </h1>
+            <p className="text-sm text-slate-600 mt-1">
+              Select your assigned duty station and authenticate via 2-Factor Authentication (2FA) to launch checkpoint controls.
+            </p>
           </div>
 
-          <div>
-            <label className="block text-xs font-extrabold text-on-surface-variant uppercase tracking-wider mb-1.5">
-              पासवर्ड / Password
-            </label>
-            <div className="relative">
-              <input
-                id="staff-password-input"
-                type={showPwd ? 'text' : 'password'}
-                className="input-field pr-12"
-                placeholder="पासवर्ड"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPwd((v) => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant"
-              >
-                <span className="material-symbols-outlined text-xl">{showPwd ? 'visibility_off' : 'visibility'}</span>
-              </button>
+          {/* Quick Mandi Centre Selector */}
+          <div className="flex items-center gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-xs">
+            <MapPin className="w-4 h-4 text-emerald-600 ml-1" />
+            <span className="text-xs font-bold text-slate-500">Mandi:</span>
+            <select
+              value={selectedMandiId}
+              onChange={(e) => setSelectedMandiId(e.target.value)}
+              className="bg-slate-50 hover:bg-slate-100 text-slate-800 text-xs font-bold py-1.5 px-3 rounded-xl border border-slate-200 outline-none cursor-pointer transition-colors"
+            >
+              {MANDIS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name} ({m.code})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Station Quick Select Grid */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 mb-8 shadow-xs">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Assigned Station Desk Selection:</span>
+            </span>
+            <span className="text-[11px] text-slate-400">Select your active duty role</span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+            {PHYSICAL_STATION_ROLES.map((station) => {
+              const isSelected = selectedStation.id === station.id;
+              const IconComp = station.icon;
+              return (
+                <button
+                  key={station.id}
+                  type="button"
+                  onClick={() => handleStationSelect(station)}
+                  className={`flex items-center gap-2 p-2.5 rounded-xl border text-left transition-all ${
+                    isSelected
+                      ? 'bg-emerald-50 border-emerald-500 shadow-xs ring-2 ring-emerald-500/20'
+                      : 'bg-slate-50 border-slate-200 hover:border-slate-300 hover:bg-white'
+                  }`}
+                >
+                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                    isSelected ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}>
+                    <IconComp className="w-3.5 h-3.5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className={`text-xs font-bold truncate ${isSelected ? 'text-emerald-900' : 'text-slate-800'}`}>
+                      {station.roleLabel.split(':')[1] || station.roleLabel}
+                    </p>
+                    <p className="text-[10px] text-slate-500 truncate">
+                      {station.officerName}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Two-Column Grid: Station Details & Auth Form */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          
+          {/* Left: Selected Station Overview & Mandi Telemetry */}
+          <div className="lg:col-span-7 space-y-6">
+            
+            {/* Active Station Card */}
+            <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-xs">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                  <selectedStation.icon className="w-6 h-6" />
+                </div>
+                <div>
+                  <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">
+                    Selected Duty Desk
+                  </span>
+                  <h2 className="text-xl font-extrabold text-slate-900">
+                    {selectedStation.roleLabel}
+                  </h2>
+                </div>
+              </div>
+
+              <p className="text-sm text-slate-600 leading-relaxed mb-6">
+                {selectedStation.description}
+              </p>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-100 text-xs">
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Officer Name</span>
+                  <span className="font-bold text-slate-800">{selectedStation.officerName}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Terminal Code</span>
+                  <span className="font-bold text-slate-800 font-mono">{selectedStation.terminalCode}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Assigned Lane</span>
+                  <span className="font-bold text-slate-800">{selectedStation.terminalLane}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Mandi Yard Telemetry Mini Card */}
+            <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-xs">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-emerald-600" />
+                  <h3 className="text-sm font-bold text-slate-800">
+                    Live Yard Telemetry: {selectedMandi.name}
+                  </h3>
+                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  {activeTelemetry.status}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <p className="text-xl font-extrabold text-slate-900 font-mono">{activeTelemetry.trucksInYard}</p>
+                  <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Vehicles in Yard</p>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <p className="text-xl font-extrabold text-slate-900 font-mono">{activeTelemetry.gateVelocity}</p>
+                  <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Gate Pace</p>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <p className="text-xl font-extrabold text-emerald-600 font-mono">{activeTelemetry.loadPercentage}%</p>
+                  <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Intake Load</p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Right: Modern 2FA Sign-In Card */}
+          <div className="lg:col-span-5">
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-200/50 p-6 sm:p-8">
+              
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-1">
+                  <h3 className="text-lg font-bold text-slate-900">
+                    {authStep === 1 ? 'Step 1: Role & Credentials' : 'Step 2: 2FA Verification'}
+                  </h3>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono">
+                    Step {authStep}/2
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500">
+                  {authStep === 1
+                    ? 'Verify administrative credentials matching your claimed desk.'
+                    : `Enter the 6-digit authentication code sent to ${maskedMobile}.`}
+                </p>
+              </div>
+
+              {error && (
+                <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {/* ── STEP 1: CREDENTIALS & ROLE MATCH FORM ───────────────────── */}
+              {authStep === 1 && (
+                <form onSubmit={handleVerifyCredentials} className="space-y-4">
+                  
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Officer Mobile Number
+                    </label>
+                    <div className="relative">
+                      <div className="absolute left-3.5 top-3 text-xs font-bold text-slate-400">
+                        +91
+                      </div>
+                      <input
+                        type="tel"
+                        maxLength="10"
+                        value={officerPhone}
+                        onChange={(e) => setOfficerPhone(e.target.value.replace(/\D/g, ''))}
+                        className="w-full pl-12 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-emerald-500 focus:bg-white font-mono"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Officer Name
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type="text"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-emerald-500 focus:bg-white"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      Password / Security PIN
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-900 focus:outline-none focus:border-emerald-500 focus:bg-white font-mono"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600">
+                    <span className="font-bold text-slate-700">Claimed Station Desk: </span>
+                    <span className="text-emerald-700 font-bold">{selectedStation.roleLabel}</span>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 mt-4 cursor-pointer disabled:opacity-50"
+                  >
+                    {isLoading ? (
+                      <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <span>Verify Role & Request 2FA OTP</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+
+                </form>
+              )}
+
+              {/* ── STEP 2: CLEAN 6-DIGIT OTP VERIFICATION FORM ─────────────── */}
+              {authStep === 2 && (
+                <form onSubmit={handleVerifyOtp} className="space-y-4">
+                  
+                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>OTP Challenge Valid:</span>
+                    </div>
+                    <span className="font-mono font-black text-emerald-800">
+                      {Math.floor(otpSecondsLeft / 60)}:{(otpSecondsLeft % 60).toString().padStart(2, '0')}
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                      6-Digit Administrative SMS Code
+                    </label>
+                    <div className="relative">
+                      <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type="text"
+                        maxLength="6"
+                        autoFocus
+                        placeholder="••••••"
+                        value={otp}
+                        onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-base font-black text-slate-900 text-center tracking-[0.4em] focus:outline-none focus:border-emerald-500 focus:bg-white font-mono"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isLoading || otp.length !== 6 || otpSecondsLeft === 0}
+                    className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 mt-4 cursor-pointer disabled:opacity-50"
+                  >
+                    {isLoading ? (
+                      <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <span>Verify OTP & Sign In to Terminal</span>
+                        <CheckCircle2 className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+
+                  <div className="pt-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthStep(1);
+                        setError('');
+                      }}
+                      className="text-xs text-slate-500 hover:text-emerald-700 font-medium inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>Back to Station & Credentials</span>
+                    </button>
+                  </div>
+
+                </form>
+              )}
+
+              <div className="mt-6 pt-4 border-t border-slate-100 text-center">
+                <Link
+                  to="/"
+                  className="text-xs text-slate-500 hover:text-emerald-600 font-medium inline-flex items-center gap-1"
+                >
+                  <span>← Return to Citizen Farmer Portal</span>
+                </Link>
+              </div>
+
             </div>
           </div>
 
-          {error && (
-            <div className="error-banner" role="alert">
-              <span className="material-symbols-outlined text-lg">error</span>
-              {error}
-            </div>
-          )}
+        </div>
 
-          <button
-            id="staff-login-btn"
-            type="submit"
-            disabled={loading}
-            className="btn-primary bg-secondary disabled:opacity-60"
-          >
-            {loading
-              ? <><span className="material-symbols-outlined animate-spin">autorenew</span><span>लॉगिन हो रहा है...</span></>
-              : <><span className="material-symbols-outlined">login</span><span>लॉगिन करें</span></>
-            }
-          </button>
-        </form>
-
-        <button
-          onClick={() => navigate('/')}
-          className="flex items-center justify-center gap-1 text-sm text-on-surface-variant font-bold"
-        >
-          <span className="material-symbols-outlined text-base">arrow_back</span>
-          मुख्य पृष्ठ
-        </button>
       </div>
-    </main>
+    </div>
   );
 }
+
