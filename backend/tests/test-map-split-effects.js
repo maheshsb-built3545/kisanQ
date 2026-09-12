@@ -1,4 +1,4 @@
-const { haversineDistanceKm } = require('./frontend-web/src/services/routingService.js');
+const { haversineDistanceKm } = require('../../frontend-web/src/services/routingService.js');
 
 async function testMapSplitEffectsScenario() {
   console.log('=== TEST: Split Effects Map Remount Prevention ===');

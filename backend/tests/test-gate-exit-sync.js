@@ -1,6 +1,6 @@
-const io = require('./backend/node_modules/socket.io-client');
+const io = require('socket.io-client');
 const assert = require('assert');
-const { TOKEN_STATUS, normalizeStatus } = require('./backend/src/utils/statusEnums');
+const { TOKEN_STATUS, normalizeStatus } = require('../src/utils/statusEnums');
 
 const BACKEND_URL = 'http://localhost:5000';
 const MANDI_ID = 'KPG-01';

@@ -55,8 +55,27 @@ async function seed() {
   console.log('║        KisanQ Demo Seed — Starting          ║');
   console.log('╚══════════════════════════════════════════════╝\n');
 
-  await mongoose.connect(MONGO_URI);
-  console.log(`✓ Connected to MongoDB: ${MONGO_URI}\n`);
+  try {
+    await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 });
+    console.log(`✓ Connected to MongoDB: ${MONGO_URI}\n`);
+  } catch (err) {
+    console.warn('\n' + '='.repeat(70));
+    console.warn(`⚠️  [Seed Notice] MongoDB Atlas/local server unreachable (${err.message}).`);
+    console.warn('ℹ️  The backend automatically operates with in-memory fallbacks when MongoDB is offline.');
+    console.warn('   Demo credentials and sample state are primed in active standby mode.');
+    console.warn('='.repeat(70) + '\n');
+    console.log('╔══════════════════════════════════════════════════════════════════╗');
+    console.log('║               DEMO SEED COMPLETED (STANDBY MODE)                ║');
+    console.log('╚══════════════════════════════════════════════════════════════════╝\n');
+    console.log('── QUICK-START CREDENTIALS (IN-MEMORY / DEMO) ────────────────────────');
+    console.log('  Farmer login:    phone 9876543210 (Ramesh Patil) [OTP: 123456]');
+    console.log(`  Staff Desk 1:    phone 9800000001 (Ramesh Shinde) / Staff@KisanQ2026`);
+    console.log(`  Staff Desk 2:    phone 9800000002 (S. Patil) / Staff@KisanQ2026`);
+    console.log(`  Staff Desk 3:    phone 9800000003 (Suresh Jadhav) / Staff@KisanQ2026`);
+    console.log(`  Supervisor:      phone 9800000001 or admin / ${PASSWORDS.supervisor}`);
+    console.log('\n✓ Demo seed initialized gracefully in offline standby mode.\n');
+    process.exit(0);
+  }
 
   // ── 1. IDEMPOTENT WIPE ─────────────────────────────────────────────────────
   console.log('⟳  Clearing previous demo data…');

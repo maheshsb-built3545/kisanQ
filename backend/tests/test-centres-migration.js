@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
-const Centre = require('./src/models/Centre');
-const centreService = require('./src/services/centreService');
+const Centre = require('../src/models/Centre');
+const centreService = require('../src/services/centreService');
 
 async function testCentresMigrationWithOldPlaceholder() {
   console.log('=== TEST: APMC Centres Migration against Dirty/Pre-existing DB ===');

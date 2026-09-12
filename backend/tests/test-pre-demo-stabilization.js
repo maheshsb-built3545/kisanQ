@@ -152,7 +152,7 @@ async function runStabilizationTests() {
   // ──────────────────────────────────────────────────────────────────────────
   console.log('📌 [Scenario 6] Testing Fast-Track request -> rejection -> re-request cycle...');
   try {
-    const jwt = require('./backend/node_modules/jsonwebtoken');
+    const jwt = require('jsonwebtoken');
     const JWT_SECRET = process.env.JWT_SECRET || 'kisanq_jwt_super_secret_key_change_in_production';
     const supervisorJwt = jwt.sign(
       {

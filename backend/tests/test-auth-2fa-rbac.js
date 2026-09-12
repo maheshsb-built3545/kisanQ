@@ -5,7 +5,7 @@
  */
 
 const assert = require('assert');
-const jwt = require('./backend/node_modules/jsonwebtoken');
+const jwt = require('jsonwebtoken');
 
 const BACKEND_URL = 'http://localhost:5000';
 const JWT_SECRET = process.env.JWT_SECRET || 'kisanq_jwt_super_secret_key_change_in_production';

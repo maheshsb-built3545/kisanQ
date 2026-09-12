@@ -19,7 +19,7 @@
  * ============================================================================
  */
 
-const io = require('./backend/node_modules/socket.io-client');
+const io = require('socket.io-client');
 const http = require('http');
 
 
