@@ -45,11 +45,11 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps, curl, postman) or matching origins
+    // Allow requests with no origin (like native mobile apps, curl, postman) or matching allowed origins
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       return callback(null, true);
     }
-    return callback(null, true); // Permissive CORS for development & demo
+    return callback(new Error(`Blocked by CORS: Origin '${origin}' is not authorized`));
   },
   credentials: true
 }));
@@ -105,8 +105,8 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
-  logger.info(`[Server] KisanQ backend running on port ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  logger.info(`[Server] KisanQ backend running on port ${PORT} (0.0.0.0)`);
   logger.info(`[Server] Health check: http://localhost:${PORT}/api/health`);
 });
 
