@@ -421,6 +421,15 @@ async function saveTokenToApi(token) {
       };
     }
 
+    // 400 Bad Request: Slot expired
+    if (res.status === 400 && (data?.code === 'SLOT_EXPIRED' || data?.error === 'SLOT_EXPIRED')) {
+      return {
+        error: 'SLOT_EXPIRED',
+        code: 'SLOT_EXPIRED',
+        message: data?.message || 'The selected arrival time slot has already passed for today. Please select a future time slot or book for tomorrow.'
+      };
+    }
+
     // 400 Bad Request: Pickup location required
     if (res.status === 400 || data?.code === 'PICKUP_LOCATION_REQUIRED') {
       return {
@@ -434,8 +443,12 @@ async function saveTokenToApi(token) {
       return data.token;
     }
 
-    if (data?.error || data?.code || data?.message) {
-      return { error: data.code || data.error || 'BOOKING_FAILED', code: data.code || data.error, message: data.message };
+    if (!res.ok || data?.error || data?.code || data?.message) {
+      return {
+        error: data?.code || data?.error || 'BOOKING_FAILED',
+        code: data?.code || data?.error || 'BOOKING_FAILED',
+        message: data?.message || `Booking request returned status ${res.status}`
+      };
     }
 
   } catch (err) {

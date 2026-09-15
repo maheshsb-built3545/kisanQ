@@ -72,6 +72,10 @@ const farmerSchema = new mongoose.Schema(
       default: 0,
       min: 0
     },
+    pushToken: {
+      type: String,
+      trim: true
+    },
     pickupLocation: {
       type: {
         type: String,

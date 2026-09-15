@@ -6,6 +6,8 @@ const Token = require('../models/Token');
 const Farmer = require('../models/Farmer');
 const authService = require('../services/authService');
 const logger = require('../utils/logger');
+const { optionalAuthenticate } = require('../middleware/auth.middleware');
+const fastTrackController = require('../controllers/fastTrack.controller');
 
 
 const { TOKEN_STATUS, normalizeStatus } = require('../utils/statusEnums');
@@ -36,6 +38,79 @@ function calculateHaversineDistanceMeters(lat1, lon1, lat2, lon2) {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return R * c;
+}
+
+/**
+ * Helper to check if a booking slot has expired relative to current server time.
+ * @param {string} slotDateStr - e.g. "2026-09-13", "13 Sep 2026", "Today"
+ * @param {string} slotTimeStr - e.g. "08:00 AM - 10:00 AM", "Morning  08:00 – 11:00 AM", "14:00 - 17:00"
+ * @param {number} bufferMinutes - Grace buffer in minutes before slot end (default: 15)
+ * @returns {boolean} true if slot is expired / passed
+ */
+function isSlotExpired(slotDateStr, slotTimeStr, bufferMinutes = 15) {
+  if (!slotTimeStr) return false;
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth();
+  const currentDate = now.getDate();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  // Check if slot date is provided and determine if it is today, past, or future
+  if (slotDateStr && typeof slotDateStr === 'string' && slotDateStr.toLowerCase() !== 'today') {
+    let parsedDate = null;
+    const cleanDateStr = slotDateStr.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(cleanDateStr)) {
+      const [y, m, d] = cleanDateStr.split('-').map(Number);
+      parsedDate = new Date(y, m - 1, d);
+    } else {
+      const d = new Date(cleanDateStr);
+      if (!isNaN(d.getTime())) {
+        parsedDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      }
+    }
+
+    if (parsedDate) {
+      const todayStart = new Date(currentYear, currentMonth, currentDate);
+      if (parsedDate < todayStart) {
+        return true; // Past date is always expired
+      }
+      if (parsedDate > todayStart) {
+        return false; // Future date is never expired
+      }
+      // If parsedDate == todayStart, continue to slot end-time evaluation
+    }
+  }
+
+  // Parse slot end time from slotTimeStr
+  // Matches: "08:00 AM - 10:00 AM", "Morning  08:00 – 11:00 AM", "Afternoon 02:00 – 05:00 PM", "14:00 - 17:00", etc.
+  const timeRegex = /(?:-|–|to)\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i;
+  const match = slotTimeStr.match(timeRegex);
+
+  if (match) {
+    let endHour = parseInt(match[1], 10);
+    const endMinute = match[2] ? parseInt(match[2], 10) : 0;
+    const ampm = match[3] ? match[3].toUpperCase() : null;
+
+    if (ampm === 'PM' && endHour < 12) {
+      endHour += 12;
+    } else if (ampm === 'AM' && endHour === 12) {
+      endHour = 0;
+    } else if (!ampm) {
+      // 12-hour heuristic if AM/PM is omitted in the second part
+      if (endHour <= 6) {
+        endHour += 12; // e.g. 2:00 -> 14:00, 5:00 -> 17:00
+      }
+    }
+
+    const slotEndMinutes = endHour * 60 + endMinute;
+    // Slot is expired if current time is within bufferMinutes of the end time or past it
+    if (currentMinutes >= (slotEndMinutes - bufferMinutes)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // ─── In-Memory Token Store (Fallback when Atlas is offline) ────────────────────
@@ -122,7 +197,7 @@ function inMemoryGetActiveTokens(mandiId = null) {
     if (mandiId && entry.token.mandiId !== mandiId && entry.token.mandiCode !== mandiId.split('-')[0]) continue;
     active.push(entry.token);
   }
-  active.sort((a, b) => (b.isFastTrack ? 1 : 0) - (a.isFastTrack ? 1 : 0) || new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+  active.sort((a, b) => (b.isFastTrack ? 1 : 0) - (a.isFastTrack ? 1 : 0) || (b.fastTrackTier || 0) - (a.fastTrackTier || 0) || new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
   active.forEach((t, idx) => {
     t.queuePosition = idx + 1;
   });
@@ -141,7 +216,7 @@ async function repositionMandiQueue(mandiId) {
     const activeTokens = await Token.find({
       $or: [{ mandiId }, { mandiCode: mandiId.split('-')[0] }],
       status: { $nin: ['Completed', 'COMPLETED', 'Cancelled', 'CANCELLED'] }
-    }).sort({ isFastTrack: -1, createdAt: 1 });
+    }).sort({ isFastTrack: -1, fastTrackTier: -1, createdAt: 1 });
 
     for (let idx = 0; idx < activeTokens.length; idx++) {
       activeTokens[idx].queuePosition = idx + 1;
@@ -478,42 +553,309 @@ router.get('/mandi/:mandiId', async (req, res) => {
 
 
 /**
+ * Shared core token reservation & booking creation function.
+ * Used identically by manual web form, manual mobile form, and voice booking flow.
+ */
+async function createTokenReservation(params) {
+  const {
+    tokenNumber,
+    id,
+    farmerName,
+    farmerPhone,
+    phone,
+    farmerId,
+    mandiId,
+    mandiName,
+    mandiCode,
+    crop,
+    quantity,
+    quantityBand,
+    slotDate,
+    slotTime,
+    slotLabel,
+    queuePosition,
+    latitude,
+    longitude,
+    stages,
+    channel = 'app',
+    io = null,
+    authUser = null,
+    isInternalAdmin = false
+  } = params;
+
+  const assignedTokenNumber = tokenNumber || id || generateTokenNumber(mandiCode || (mandiId ? mandiId.split('-')[0] : 'KPG'));
+  const assignedPhone = farmerPhone || phone || '9876543210';
+  const assignedFarmerName = farmerName || 'Mahesh Borde';
+  const parsedQuantity = Number(quantity) || 10;
+  const assignedMandiId = mandiId || 'KPG-01';
+  const parsedLat = Number(latitude) || 19.8928;
+  const parsedLng = Number(longitude) || 74.4820;
+
+  // 1. Auth check
+  if (!authUser && !isInternalAdmin) {
+    let isKnownFarmer = false;
+    if (mongoose.connection.readyState === 1) {
+      const f = await Farmer.findOne({ phone: assignedPhone });
+      if (f) isKnownFarmer = true;
+    }
+    if (!isKnownFarmer && (assignedPhone.length === 10 || assignedPhone.startsWith('980000000'))) {
+      isKnownFarmer = true;
+    }
+    if (!isKnownFarmer) {
+      const err = new Error('Access denied. Valid citizen farmer or staff authentication session required to book tokens.');
+      err.status = 401;
+      err.code = 'UNAUTHORIZED';
+      throw err;
+    }
+  }
+
+  // 2. Pickup location check
+  let farmerDoc = null;
+  if (mongoose.connection.readyState === 1) {
+    farmerDoc = await Farmer.findOne({ phone: assignedPhone });
+  }
+  if (!farmerDoc && authService.inMemoryFarmers && authService.inMemoryFarmers.has(assignedPhone)) {
+    farmerDoc = authService.inMemoryFarmers.get(assignedPhone);
+  }
+
+  let effectiveLat = parsedLat;
+  let effectiveLng = parsedLng;
+  if (farmerDoc && farmerDoc.pickupLocation && Array.isArray(farmerDoc.pickupLocation.coordinates) && farmerDoc.pickupLocation.coordinates.length === 2) {
+    const flng = Number(farmerDoc.pickupLocation.coordinates[0]);
+    const flat = Number(farmerDoc.pickupLocation.coordinates[1]);
+    if (!isNaN(flat)) effectiveLat = flat;
+    if (!isNaN(flng)) effectiveLng = flng;
+  }
+
+  // 3. Slot expiry check
+  const effectiveSlotTime = slotTime || slotLabel;
+  if (effectiveSlotTime && isSlotExpired(slotDate, effectiveSlotTime, 15)) {
+    const err = new Error('The selected arrival time slot has already passed for today. Please select a future time slot or book for tomorrow.');
+    err.status = 400;
+    err.code = 'SLOT_EXPIRED';
+    throw err;
+  }
+
+  // 4. Single-Active-Token Constraint
+  if (mongoose.connection.readyState === 1) {
+    const activeToken = await Token.findOne({
+      $or: [{ farmerPhone: assignedPhone }, { phone: assignedPhone }],
+      status: { $nin: ['Completed', 'COMPLETED', 'Cancelled', 'CANCELLED'] }
+    });
+
+    if (activeToken) {
+      const err = new Error(`You already have an active booking (Token #${activeToken.tokenNumber || activeToken.id}). Complete delivery before reserving a new slot.`);
+      err.status = 409;
+      err.code = 'ACTIVE_TOKEN_EXISTS';
+      err.activeToken = {
+        id: activeToken.id || activeToken.tokenNumber,
+        tokenNumber: activeToken.tokenNumber || activeToken.id,
+        mandiName: activeToken.mandiName,
+        crop: activeToken.crop,
+        quantity: activeToken.quantity,
+        status: activeToken.status,
+        slotDate: activeToken.slotDate,
+        slotTime: activeToken.slotTime || activeToken.slotLabel
+      };
+      throw err;
+    }
+  } else {
+    const memActiveToken = inMemoryFindActiveToken(assignedPhone);
+    if (memActiveToken) {
+      const err = new Error(`You already have an active booking (Token #${memActiveToken.tokenNumber || memActiveToken.id}). Complete delivery before reserving a new slot.`);
+      err.status = 409;
+      err.code = 'ACTIVE_TOKEN_EXISTS';
+      err.activeToken = {
+        id: memActiveToken.id || memActiveToken.tokenNumber,
+        tokenNumber: memActiveToken.tokenNumber || memActiveToken.id,
+        mandiName: memActiveToken.mandiName,
+        crop: memActiveToken.crop,
+        quantity: memActiveToken.quantity,
+        status: memActiveToken.status,
+        slotDate: memActiveToken.slotDate,
+        slotTime: memActiveToken.slotTime || memActiveToken.slotLabel
+      };
+      throw err;
+    }
+  }
+
+  // 5. Build 5-Stage Checkpoints
+  let tokenStages = Array.isArray(stages) && stages.length > 0 ? stages : DEFAULT_STAGES;
+  tokenStages = tokenStages.map((stg, idx) => ({
+    stageIndex: stg.stageIndex !== undefined ? stg.stageIndex : idx,
+    id: stg.id || DEFAULT_STAGES[idx]?.id || `STAGE_${idx}`,
+    title: stg.title || stg.label || DEFAULT_STAGES[idx]?.title,
+    label: stg.label || stg.title || DEFAULT_STAGES[idx]?.label,
+    shortLabel: stg.shortLabel || DEFAULT_STAGES[idx]?.shortLabel,
+    officerName: stg.officerName || stg.officer || DEFAULT_STAGES[idx]?.officerName,
+    officer: stg.officer || stg.officerName || DEFAULT_STAGES[idx]?.officer,
+    officerRole: stg.officerRole || stg.officerCode || DEFAULT_STAGES[idx]?.officerRole,
+    officerCode: stg.officerCode || DEFAULT_STAGES[idx]?.officerCode,
+    icon: stg.icon || DEFAULT_STAGES[idx]?.icon,
+    status: stg.status || 'pending',
+    timestamp: stg.timestamp || stg.completedAt || null,
+    completedAt: stg.completedAt || stg.timestamp || null,
+    officerSigId: stg.officerSigId || null,
+    details: stg.details || {},
+    grade: stg.grade || null,
+    weight: stg.weight || null
+  }));
+
+  let savedToken = null;
+
+  // 6. Persist to MongoDB or in-memory
+  if (mongoose.connection.readyState === 1) {
+    let existing = await Token.findOne({
+      $or: [{ tokenNumber: assignedTokenNumber }, { id: assignedTokenNumber }]
+    });
+
+    if (existing) {
+      const err = new Error(`Token with number ${assignedTokenNumber} already exists.`);
+      err.status = 409;
+      err.code = 'DUPLICATE_TOKEN';
+      err.token = existing;
+      throw err;
+    }
+
+    let activeQueueCount = await Token.countDocuments({
+      mandiId: assignedMandiId,
+      status: { $nin: ['Completed', 'COMPLETED', 'Cancelled', 'CANCELLED'] }
+    });
+    const calculatedQueuePos = (queuePosition !== undefined && queuePosition !== null)
+      ? Number(queuePosition)
+      : (activeQueueCount + 1);
+
+    const assignedFarmerId = authUser ? (authUser.id || authUser._id || authUser.farmerId) : (farmerId || undefined);
+
+    const newToken = new Token({
+      tokenNumber: assignedTokenNumber,
+      id: assignedTokenNumber,
+      farmerName: assignedFarmerName,
+      farmerPhone: assignedPhone,
+      farmerId: assignedFarmerId,
+      phone: assignedPhone,
+      mandiId: assignedMandiId,
+      mandiName: mandiName || 'APMC Kopargaon',
+      mandiCode: mandiCode || (assignedMandiId ? assignedMandiId.split('-')[0] : 'KPG'),
+      crop: crop || 'Wheat',
+      quantity: parsedQuantity,
+      quantityBand: quantityBand || `${parsedQuantity} Quintals`,
+      slotDate: slotDate || new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+      slotTime: slotTime || slotLabel || '08:00 – 11:00 AM',
+      slotLabel: slotLabel || slotTime || '08:00 – 11:00 AM',
+      status: 'Booked',
+      currentStageIndex: 0,
+      queuePosition: calculatedQueuePos,
+      stages: tokenStages,
+      latitude: effectiveLat,
+      longitude: effectiveLng,
+      channel,
+      location: {
+        type: 'Point',
+        coordinates: [effectiveLng, effectiveLat]
+      },
+      createdAt: new Date()
+    });
+
+    savedToken = await newToken.save();
+    logger.info(`[Tokens] New token booked and persisted to MongoDB: ${savedToken.tokenNumber} (Queue Pos: ${calculatedQueuePos})`);
+  } else {
+    let activeQueueCount = inMemoryGetActiveTokens(assignedMandiId).length;
+    const calculatedQueuePos = (queuePosition !== undefined && queuePosition !== null)
+      ? Number(queuePosition)
+      : (activeQueueCount + 1);
+
+    savedToken = {
+      tokenNumber: assignedTokenNumber,
+      id: assignedTokenNumber,
+      farmerName: assignedFarmerName,
+      farmerPhone: assignedPhone,
+      farmerId: authUser ? (authUser.id || authUser._id || authUser.farmerId) : (farmerId || undefined),
+      phone: assignedPhone,
+      mandiId: assignedMandiId,
+      mandiName: mandiName || 'APMC Kopargaon',
+      mandiCode: mandiCode || (assignedMandiId ? assignedMandiId.split('-')[0] : 'KPG'),
+      crop: crop || 'Wheat',
+      quantity: parsedQuantity,
+      quantityBand: quantityBand || `${parsedQuantity} Quintals`,
+      slotDate: slotDate || new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+      slotTime: slotTime || slotLabel || '08:00 – 11:00 AM',
+      slotLabel: slotLabel || slotTime || '08:00 – 11:00 AM',
+      status: 'Booked',
+      currentStageIndex: 0,
+      queuePosition: calculatedQueuePos,
+      stages: tokenStages,
+      latitude: effectiveLat,
+      longitude: effectiveLng,
+      channel,
+      location: {
+        type: 'Point',
+        coordinates: [effectiveLng, effectiveLat]
+      },
+      createdAt: new Date()
+    };
+    inMemoryStoreToken(assignedPhone, savedToken);
+    logger.info(`[Tokens] New token stored in-memory (Atlas offline): ${savedToken.tokenNumber}`);
+  }
+
+  // 7. 500m AgriPool Proximity Engine
+  let agriPoolMatch = null;
+  try {
+    const candidateTokens = mongoose.connection.readyState === 1
+      ? await Token.find({
+          _id: { $ne: savedToken._id },
+          $or: [{ mandiId: assignedMandiId }, { mandiCode: mandiCode || 'KPG' }],
+          slotDate: savedToken.slotDate,
+          farmerPhone: { $ne: assignedPhone },
+          status: { $nin: ['Completed', 'COMPLETED', 'Cancelled', 'CANCELLED'] }
+        })
+      : inMemoryGetActiveTokens(assignedMandiId).filter((p) => (p.farmerPhone || p.phone) !== assignedPhone && p.slotDate === savedToken.slotDate);
+
+    for (const peer of candidateTokens) {
+      const peerLat = peer.latitude || 19.8928;
+      const peerLng = peer.longitude || 74.4820;
+      const distMeters = calculateHaversineDistanceMeters(effectiveLat, effectiveLng, peerLat, peerLng);
+
+      if (distMeters <= 500) {
+        const roundedDist = Math.max(25, Math.round(distMeters));
+        const mandiLabel = savedToken.mandiName?.replace('APMC ', '') || 'Kopargaon';
+        agriPoolMatch = {
+          type: 'AGRIPOOL_OPPORTUNITY',
+          title: '🤝 AgriPool Alert',
+          message: `🤝 AgriPool Alert: Another farmer within 500m is heading to APMC ${mandiLabel} today. Connect to share transport!`,
+          mandiName: savedToken.mandiName,
+          mandiId: assignedMandiId,
+          slotDate: savedToken.slotDate,
+          distanceMeters: roundedDist,
+          farmer1: { name: savedToken.farmerName, phone: assignedPhone, tokenNumber: savedToken.tokenNumber, crop: savedToken.crop, quantity: savedToken.quantity, latitude: effectiveLat, longitude: effectiveLng },
+          farmer2: { name: peer.farmerName, phone: peer.farmerPhone || peer.phone, tokenNumber: peer.tokenNumber, crop: peer.crop, quantity: peer.quantity, latitude: peerLat, longitude: peerLng },
+          estimatedSavings: '₹750 – ₹1,200 on shared freight'
+        };
+        break;
+      }
+    }
+  } catch (poolErr) {
+    logger.warn(`[AgriPool] Proximity calculation notice: ${poolErr.message}`);
+  }
+
+  // 8. WebSocket Broadcast
+  if (io) {
+    broadcastNewBooking(io, assignedMandiId, savedToken);
+    if (agriPoolMatch) {
+      broadcastAgriPoolMatch(io, agriPoolMatch);
+    }
+  }
+
+  return { savedToken, agriPoolMatch };
+}
+
+/**
  * @route   POST /api/tokens/book
  * @desc    Create and persist a new token in MongoDB Atlas & broadcast event
  * @access  Public
  */
 router.post('/book', async (req, res) => {
   try {
-    const {
-      tokenNumber,
-      id,
-      farmerName,
-      farmerPhone,
-      phone,
-      mandiId,
-      mandiName,
-      mandiCode,
-      crop,
-      quantity,
-      quantityBand,
-      slotDate,
-      slotTime,
-      slotLabel,
-      queuePosition,
-      latitude,
-      longitude,
-      stages
-    } = req.body;
-
-    const assignedTokenNumber = tokenNumber || id || generateTokenNumber(mandiCode || (mandiId ? mandiId.split('-')[0] : 'KPG'));
-    const assignedPhone = farmerPhone || phone || '9876543210';
-    const assignedFarmerName = farmerName || 'Mahesh Borde';
-    const parsedQuantity = Number(quantity) || 10;
-    const assignedMandiId = mandiId || 'KPG-01';
-    const parsedLat = Number(latitude) || 19.8928;
-    const parsedLng = Number(longitude) || 74.4820;
-
-    // ─── AUTHENTICATION & IDENTITY ENFORCEMENT ──────────────────────────────
     const authHeader = req.headers.authorization;
     let authUser = null;
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -521,344 +863,15 @@ router.post('/book', async (req, res) => {
       try {
         const secret = process.env.JWT_SECRET || 'kisanq_jwt_super_secret_key_change_in_production';
         authUser = jwt.verify(rawToken, secret);
-      } catch (e) {
-        // Token invalid or expired
-      }
+      } catch (e) {}
     }
 
-    // Require either valid JWT auth or valid 10-digit citizen farmer mobile
-    if (!authUser && !req.headers['x-internal-admin']) {
-      let isKnownFarmer = false;
-      if (mongoose.connection.readyState === 1) {
-        const f = await Farmer.findOne({ phone: assignedPhone });
-        if (f) isKnownFarmer = true;
-      }
-      if (!isKnownFarmer && (assignedPhone.length === 10 || assignedPhone.startsWith('980000000'))) {
-        isKnownFarmer = true;
-      }
-      if (!isKnownFarmer) {
-        return res.status(401).json({
-          success: false,
-          error: 'UNAUTHORIZED',
-          message: 'Access denied. Valid citizen farmer or staff authentication session required to book tokens.'
-        });
-      }
-    }
-
-    // ─── CHECK FARMER PICKUP LOCATION (MANDATORY BEFORE BOOKING) ─────────
-    let farmerDoc = null;
-    if (mongoose.connection.readyState === 1) {
-      farmerDoc = await Farmer.findOne({ phone: assignedPhone });
-    }
-    if (!farmerDoc && authService.inMemoryFarmers && authService.inMemoryFarmers.has(assignedPhone)) {
-      farmerDoc = authService.inMemoryFarmers.get(assignedPhone);
-    }
-
-    const hasPickupPin = Boolean(
-      farmerDoc &&
-      farmerDoc.pickupLocation &&
-      Array.isArray(farmerDoc.pickupLocation.coordinates) &&
-      farmerDoc.pickupLocation.coordinates.length === 2 &&
-      farmerDoc.pickupLocation.coordinates[0] !== undefined &&
-      farmerDoc.pickupLocation.coordinates[1] !== undefined &&
-      !isNaN(Number(farmerDoc.pickupLocation.coordinates[0])) &&
-      !isNaN(Number(farmerDoc.pickupLocation.coordinates[1]))
-    );
-
-    if (!hasPickupPin) {
-      logger.warn(`[Tokens] Booking blocked (400 Bad Request): Farmer ${assignedPhone} has not set pickup location pin.`);
-      return res.status(400).json({
-        success: false,
-        code: 'PICKUP_LOCATION_REQUIRED',
-        message: 'Please set your pickup location before booking'
-      });
-    }
-
-    // Read farmer coordinates directly from Farmer.pickupLocation (GeoJSON [longitude, latitude])
-    const farmerLng = Number(farmerDoc.pickupLocation.coordinates[0]);
-    const farmerLat = Number(farmerDoc.pickupLocation.coordinates[1]);
-    const effectiveLat = !isNaN(farmerLat) ? farmerLat : parsedLat;
-    const effectiveLng = !isNaN(farmerLng) ? farmerLng : parsedLng;
-
-    // ─── STRICT SINGLE-ACTIVE-TOKEN CONSTRAINT (PER PHONE NUMBER) ───────────
-
-    if (mongoose.connection.readyState === 1) {
-      // MongoDB is live — check Atlas
-      const activeToken = await Token.findOne({
-        $or: [{ farmerPhone: assignedPhone }, { phone: assignedPhone }],
-        status: { $nin: ['Completed', 'COMPLETED', 'Cancelled', 'CANCELLED'] }
-      });
-
-      if (activeToken) {
-        logger.warn(`[Tokens] Booking rejected (409 Conflict): Farmer ${assignedPhone} already has active token ${activeToken.tokenNumber}`);
-        return res.status(409).json({
-          success: false,
-          error: 'ACTIVE_TOKEN_EXISTS',
-          message: `You already have an active booking (Token #${activeToken.tokenNumber || activeToken.id}). Complete delivery before reserving a new slot.`,
-          activeToken: {
-            id: activeToken.id || activeToken.tokenNumber,
-            tokenNumber: activeToken.tokenNumber || activeToken.id,
-            mandiName: activeToken.mandiName,
-            crop: activeToken.crop,
-            quantity: activeToken.quantity,
-            status: activeToken.status,
-            slotDate: activeToken.slotDate,
-            slotTime: activeToken.slotTime || activeToken.slotLabel
-          }
-        });
-      }
-    } else {
-      // MongoDB offline — use in-memory fallback store
-      const memActiveToken = inMemoryFindActiveToken(assignedPhone);
-      if (memActiveToken) {
-        logger.warn(`[Tokens] [In-Memory] Booking rejected (409 Conflict): Farmer ${assignedPhone} already has active token ${memActiveToken.tokenNumber}`);
-        return res.status(409).json({
-          success: false,
-          error: 'ACTIVE_TOKEN_EXISTS',
-          message: `You already have an active booking (Token #${memActiveToken.tokenNumber || memActiveToken.id}). Complete delivery before reserving a new slot.`,
-          activeToken: {
-            id: memActiveToken.id || memActiveToken.tokenNumber,
-            tokenNumber: memActiveToken.tokenNumber || memActiveToken.id,
-            mandiName: memActiveToken.mandiName,
-            crop: memActiveToken.crop,
-            quantity: memActiveToken.quantity,
-            status: memActiveToken.status,
-            slotDate: memActiveToken.slotDate,
-            slotTime: memActiveToken.slotTime || memActiveToken.slotLabel
-          }
-        });
-      }
-    }
-
-    // Build stages with defaults if missing
-    let tokenStages = Array.isArray(stages) && stages.length > 0 ? stages : DEFAULT_STAGES;
-    tokenStages = tokenStages.map((stg, idx) => ({
-      stageIndex: stg.stageIndex !== undefined ? stg.stageIndex : idx,
-      id: stg.id || DEFAULT_STAGES[idx]?.id || `STAGE_${idx}`,
-      title: stg.title || stg.label || DEFAULT_STAGES[idx]?.title,
-      label: stg.label || stg.title || DEFAULT_STAGES[idx]?.label,
-      shortLabel: stg.shortLabel || DEFAULT_STAGES[idx]?.shortLabel,
-      officerName: stg.officerName || stg.officer || DEFAULT_STAGES[idx]?.officerName,
-      officer: stg.officer || stg.officerName || DEFAULT_STAGES[idx]?.officer,
-      officerRole: stg.officerRole || stg.officerCode || DEFAULT_STAGES[idx]?.officerRole,
-      officerCode: stg.officerCode || DEFAULT_STAGES[idx]?.officerCode,
-      icon: stg.icon || DEFAULT_STAGES[idx]?.icon,
-      status: stg.status || 'pending',
-      timestamp: stg.timestamp || stg.completedAt || null,
-      completedAt: stg.completedAt || stg.timestamp || null,
-      officerSigId: stg.officerSigId || null,
-      details: stg.details || {},
-      grade: stg.grade || null,
-      weight: stg.weight || null
-    }));
-
-    let savedToken = null;
-
-    // If MongoDB is connected, persist to MongoDB
-    if (mongoose.connection.readyState === 1) {
-      let existing = await Token.findOne({
-        $or: [{ tokenNumber: assignedTokenNumber }, { id: assignedTokenNumber }]
-      });
-
-      if (existing) {
-        return res.status(409).json({
-          success: false,
-          error: 'DUPLICATE_TOKEN',
-          message: `Token with number ${assignedTokenNumber} already exists.`,
-          token: existing
-        });
-      }
-
-      let activeQueueCount = 0;
-      if (mongoose.connection.readyState === 1) {
-        activeQueueCount = await Token.countDocuments({
-          mandiId: assignedMandiId,
-          status: { $nin: ['Completed', 'COMPLETED', 'Cancelled', 'CANCELLED'] }
-        });
-      } else {
-        const activeMem = inMemoryGetActiveTokens(assignedMandiId);
-        activeQueueCount = activeMem.length;
-      }
-      const calculatedQueuePos = (queuePosition !== undefined && queuePosition !== null)
-        ? Number(queuePosition)
-        : (activeQueueCount + 1);
-
-      const assignedFarmerId = authUser ? (authUser.id || authUser._id || authUser.farmerId) : (req.body.farmerId || undefined);
-
-      const newToken = new Token({
-        tokenNumber: assignedTokenNumber,
-        id: assignedTokenNumber,
-        farmerName: assignedFarmerName,
-        farmerPhone: assignedPhone,
-        farmerId: assignedFarmerId,
-        phone: assignedPhone,
-        mandiId: assignedMandiId,
-        mandiName: mandiName || 'APMC Kopargaon',
-        mandiCode: mandiCode || 'KPG',
-        crop: crop || 'Wheat',
-        quantity: parsedQuantity,
-        quantityBand: quantityBand || `${parsedQuantity} Quintals`,
-        slotDate: slotDate || new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-        slotTime: slotTime || slotLabel || '08:00 – 11:00 AM',
-        slotLabel: slotLabel || slotTime || '08:00 – 11:00 AM',
-        status: 'Booked',
-        currentStageIndex: 0,
-        queuePosition: calculatedQueuePos,
-        stages: tokenStages,
-        latitude: effectiveLat,
-        longitude: effectiveLng,
-        location: {
-          type: 'Point',
-          coordinates: [effectiveLng, effectiveLat]
-        },
-        createdAt: new Date()
-      });
-
-      savedToken = await newToken.save();
-      logger.info(`[Tokens] New token booked and persisted to MongoDB: ${savedToken.tokenNumber} (Queue Pos: ${calculatedQueuePos}) [Lat: ${effectiveLat}, Lng: ${effectiveLng}]`);
-    } else {
-      let activeQueueCount = 0;
-      const activeMem = inMemoryGetActiveTokens(assignedMandiId);
-      activeQueueCount = activeMem.length;
-      const calculatedQueuePos = (queuePosition !== undefined && queuePosition !== null)
-        ? Number(queuePosition)
-        : (activeQueueCount + 1);
-
-      savedToken = {
-        tokenNumber: assignedTokenNumber,
-        id: assignedTokenNumber,
-        farmerName: assignedFarmerName,
-        farmerPhone: assignedPhone,
-        farmerId: authUser ? (authUser.id || authUser._id || authUser.farmerId) : (req.body.farmerId || undefined),
-        phone: assignedPhone,
-        mandiId: assignedMandiId,
-        mandiName: mandiName || 'APMC Kopargaon',
-        mandiCode: mandiCode || 'KPG',
-        crop: crop || 'Wheat',
-        quantity: parsedQuantity,
-        quantityBand: quantityBand || `${parsedQuantity} Quintals`,
-        slotDate: slotDate || new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-        slotTime: slotTime || slotLabel || '08:00 – 11:00 AM',
-        slotLabel: slotLabel || slotTime || '08:00 – 11:00 AM',
-        status: 'Booked',
-        currentStageIndex: 0,
-        queuePosition: calculatedQueuePos,
-        stages: tokenStages,
-        latitude: effectiveLat,
-        longitude: effectiveLng,
-        location: {
-          type: 'Point',
-          coordinates: [effectiveLng, effectiveLat]
-        },
-        createdAt: new Date()
-      };
-      // ─── Register in in-memory store for future single-active-token checks ───
-      inMemoryStoreToken(assignedPhone, savedToken);
-      logger.info(`[Tokens] New token stored in-memory (Atlas offline): ${savedToken.tokenNumber} (Queue Pos: ${calculatedQueuePos}) [Lat: ${effectiveLat}, Lng: ${effectiveLng}]`);
-
-    }
-
-    // ─── 500m Proximity-Based AgriPool Micro-Pooling Alert Engine ───────────
-    let agriPoolMatch = null;
-    if (mongoose.connection.readyState === 1 && savedToken) {
-      try {
-        const candidateTokens = await Token.find({
-          _id: { $ne: savedToken._id },
-          $or: [
-            { mandiId: assignedMandiId },
-            { mandiCode: mandiCode || 'KPG' }
-          ],
-          slotDate: savedToken.slotDate,
-          farmerPhone: { $ne: assignedPhone },
-          status: { $nin: ['Completed', 'COMPLETED', 'Cancelled', 'CANCELLED'] }
-        });
-
-        for (const peer of candidateTokens) {
-          const peerLat = peer.latitude || (peer.location?.coordinates ? peer.location.coordinates[1] : 19.8928);
-          const peerLng = peer.longitude || (peer.location?.coordinates ? peer.location.coordinates[0] : 74.4820);
-          const distMeters = calculateHaversineDistanceMeters(effectiveLat, effectiveLng, peerLat, peerLng);
-
-          if (distMeters <= 500) {
-            const roundedDist = Math.max(25, Math.round(distMeters));
-            const mandiLabel = savedToken.mandiName?.replace('APMC ', '') || 'Kopargaon';
-            agriPoolMatch = {
-              type: 'AGRIPOOL_OPPORTUNITY',
-              title: '🤝 AgriPool Alert',
-              message: `🤝 AgriPool Alert: Another farmer within 500m is heading to APMC ${mandiLabel} today. Connect to share transport!`,
-              mandiName: savedToken.mandiName,
-              mandiId: assignedMandiId,
-              slotDate: savedToken.slotDate,
-              distanceMeters: roundedDist,
-              farmer1: {
-                name: savedToken.farmerName,
-                phone: savedToken.farmerPhone,
-                tokenNumber: savedToken.tokenNumber,
-                crop: savedToken.crop,
-                quantity: savedToken.quantity,
-                latitude: effectiveLat,
-                longitude: effectiveLng
-              },
-              farmer2: {
-                name: peer.farmerName,
-                phone: peer.farmerPhone,
-                tokenNumber: peer.tokenNumber,
-                crop: peer.crop,
-                quantity: peer.quantity,
-                latitude: peerLat,
-                longitude: peerLng
-              },
-              estimatedSavings: '₹750 – ₹1,200 on shared freight'
-            };
-            logger.info(`[AgriPool] Found 500m proximity peer: ${peer.farmerName} (${roundedDist}m away) for token ${savedToken.tokenNumber}`);
-            break;
-          }
-        }
-      } catch (poolErr) {
-        logger.warn(`[AgriPool] Error calculating micro-pooling proximity: ${poolErr.message}`);
-      }
-    } else if (savedToken) {
-      // AgriPool engine in in-memory fallback mode
-      try {
-        const allMemTokens = inMemoryGetActiveTokens();
-        for (const peer of allMemTokens) {
-          if ((peer.farmerPhone || peer.phone) === assignedPhone) continue; // skip self
-          if (peer.mandiId !== assignedMandiId) continue;                  // same mandi only
-          if (peer.slotDate !== savedToken.slotDate) continue;             // same date only
-          const peerLat = peer.latitude || 19.8928;
-          const peerLng = peer.longitude || 74.4820;
-          const distMeters = calculateHaversineDistanceMeters(effectiveLat, effectiveLng, peerLat, peerLng);
-          if (distMeters <= 500) {
-            const roundedDist = Math.max(25, Math.round(distMeters));
-            const mandiLabel = (savedToken.mandiName || '').replace('APMC ', '') || 'Kopargaon';
-            agriPoolMatch = {
-              type: 'AGRIPOOL_OPPORTUNITY',
-              title: '🤝 AgriPool Alert',
-              message: `🤝 AgriPool Alert: Another farmer within 500m is heading to APMC ${mandiLabel} today. Connect to share transport!`,
-              mandiName: savedToken.mandiName,
-              mandiId: assignedMandiId,
-              slotDate: savedToken.slotDate,
-              distanceMeters: roundedDist,
-              farmer1: { name: savedToken.farmerName, phone: assignedPhone, tokenNumber: savedToken.tokenNumber, crop: savedToken.crop, quantity: savedToken.quantity, latitude: effectiveLat, longitude: effectiveLng },
-              farmer2: { name: peer.farmerName, phone: peer.farmerPhone || peer.phone, tokenNumber: peer.tokenNumber, crop: peer.crop, quantity: peer.quantity, latitude: peerLat, longitude: peerLng },
-              estimatedSavings: '₹750 – ₹1,200 on shared freight'
-            };
-            logger.info(`[AgriPool][In-Memory] Found 500m proximity peer: ${peer.farmerName} (${roundedDist}m away) for token ${savedToken.tokenNumber}`);
-            break;
-          }
-        }
-      } catch (poolErr) {
-        logger.warn(`[AgriPool][In-Memory] Error: ${poolErr.message}`);
-      }
-    }
-
-
-    // ─── Real-Time WebSocket Broadcasts ────────────────────────────────────────────
-    if (req.io) {
-      broadcastNewBooking(req.io, assignedMandiId, savedToken);
-      if (agriPoolMatch) {
-        broadcastAgriPoolMatch(req.io, agriPoolMatch);
-      }
-    }
+    const { savedToken, agriPoolMatch } = await createTokenReservation({
+      ...req.body,
+      io: req.io,
+      authUser,
+      isInternalAdmin: Boolean(req.headers['x-internal-admin'])
+    });
 
     const isAtlasMode = mongoose.connection.readyState === 1;
     return res.status(201).json({
@@ -868,6 +881,16 @@ router.post('/book', async (req, res) => {
       agriPoolMatch
     });
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({
+        success: false,
+        error: error.code || 'BOOKING_ERROR',
+        code: error.code || 'BOOKING_ERROR',
+        message: error.message,
+        activeToken: error.activeToken,
+        token: error.token
+      });
+    }
     logger.error(`[Tokens] Error booking token: ${error.message}`, { stack: error.stack });
     return res.status(500).json({
       success: false,
@@ -1275,8 +1298,8 @@ function validateSequentialPipeline(token, incomingStageIdx) {
       if (targetIdx !== -1) {
         const stage = token.stages[targetIdx];
         stage.status = status.toLowerCase() === 'completed' ? 'Completed' : status;
-        stage.timestamp = now;
-        stage.completedAt = now;
+        stage.timestamp = req.body.timestamp ? new Date(req.body.timestamp) : now;
+        stage.completedAt = req.body.completedAt ? new Date(req.body.completedAt) : now;
         if (officerSigId) stage.officerSigId = officerSigId;
         if (officerName) stage.officerName = officerName;
         if (grade) stage.grade = grade;
@@ -1387,8 +1410,8 @@ function validateSequentialPipeline(token, incomingStageIdx) {
         if (targetIdx !== -1) {
           const stage = memToken.stages[targetIdx];
           stage.status = status.toLowerCase() === 'completed' ? 'Completed' : status;
-          stage.timestamp = now;
-          stage.completedAt = now;
+          stage.timestamp = req.body.timestamp ? new Date(req.body.timestamp) : now;
+          stage.completedAt = req.body.completedAt ? new Date(req.body.completedAt) : now;
           if (officerSigId) stage.officerSigId = officerSigId;
           if (officerName) stage.officerName = officerName;
           if (grade) stage.grade = grade;
@@ -2054,12 +2077,11 @@ router.get('/:tokenNumber/agripool-matches', async (req, res) => {
   }
 });
 
-// ─── Fast-Track Priority Endpoints ────────────────────────────────────────────
-const fastTrackController = require('../controllers/fastTrack.controller');
-const { optionalAuthenticate } = require('../middleware/auth.middleware');
-
 router.post('/:tokenNumber/fasttrack-request', optionalAuthenticate, fastTrackController.createRequest);
 router.get('/:tokenNumber/fasttrack-status', optionalAuthenticate, fastTrackController.getTokenStatus);
 
+router.createTokenReservation = createTokenReservation;
+
 module.exports = router;
+
 

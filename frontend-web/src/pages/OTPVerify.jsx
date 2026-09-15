@@ -12,16 +12,17 @@ export default function OTPVerify() {
   const phone = location.state?.phone || '9876543210';
   const name = location.state?.name;
   const preferredLanguage = location.state?.preferredLanguage || 'mr';
-  const initialDevOtp = location.state?.devOtp || '123456';
+  const isDemoMode = import.meta.env.VITE_SHOW_DEMO_LOGIN === 'true' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('demo') === 'true');
+  const initialDevOtp = location.state?.devOtp || (isDemoMode ? '123456' : '');
   const mode = location.state?.mode || 'login';
   const passcode = location.state?.passcode;
 
-  const [otp, setOtp] = useState(['1', '2', '3', '4', '5', '6']);
+  const [otp, setOtp] = useState(() => (isDemoMode ? ['1', '2', '3', '4', '5', '6'] : ['', '', '', '', '', '']));
   const [timer, setTimer] = useState(30);
   const [canResend, setCanResend] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [devOtpNotice, setDevOtpNotice] = useState('Demo Master OTP: 123456');
+  const [devOtpNotice, setDevOtpNotice] = useState(() => (isDemoMode ? 'Demo Master OTP: 123456' : ''));
 
   const inputRefs = useRef([]);
 
@@ -30,12 +31,12 @@ export default function OTPVerify() {
     clearFarmerSession();
   }, [clearFarmerSession]);
 
-  // Auto-fill devOtp if available on test environments
+  // Auto-fill devOtp if demo mode is enabled
   useEffect(() => {
-    if (initialDevOtp && initialDevOtp.length === 6) {
+    if (isDemoMode && initialDevOtp && initialDevOtp.length === 6) {
       setOtp(initialDevOtp.split(''));
     }
-  }, [initialDevOtp]);
+  }, [isDemoMode, initialDevOtp]);
 
   // Countdown timer for OTP resend
   useEffect(() => {

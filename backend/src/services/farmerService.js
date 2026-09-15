@@ -82,6 +82,76 @@ const farmerService = {
         pickupLocation: farmer.pickupLocation
       }
     };
+  },
+
+  /**
+   * Save or update the farmer's Expo push token
+   * @param {Object} params
+   * @param {string} [params.farmerId]
+   * @param {string} [params.phone]
+   * @param {string} params.pushToken
+   */
+  updatePushToken: async ({ farmerId, phone, pushToken }) => {
+    if (!pushToken || typeof pushToken !== 'string' || !pushToken.trim()) {
+      const err = new Error('A valid push token string is required');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const tokenStr = pushToken.trim();
+    const rawPhone = (phone || '').toString().trim().replace(/\D/g, '');
+    let farmer = null;
+
+    if (mongoose.connection.readyState === 1) {
+      if (farmerId && mongoose.Types.ObjectId.isValid(farmerId)) {
+        farmer = await Farmer.findById(farmerId);
+      }
+      if (!farmer && rawPhone) {
+        farmer = await Farmer.findOne({ phone: rawPhone });
+      }
+
+      if (farmer) {
+        farmer.pushToken = tokenStr;
+        await farmer.save();
+        logger.info(`[Push Token] Updated push token for ${farmer.phone} in MongoDB`);
+      }
+    }
+
+    // In-memory fallback / cache update
+    const memKey = rawPhone || (farmer ? farmer.phone : null);
+    if (memKey && inMemoryFarmers && inMemoryFarmers.has(memKey)) {
+      const memFarmer = inMemoryFarmers.get(memKey);
+      memFarmer.pushToken = tokenStr;
+      inMemoryFarmers.set(memKey, memFarmer);
+      if (!farmer) farmer = memFarmer;
+      logger.info(`[Push Token] Updated push token in-memory for ${memKey}`);
+    } else if (memKey && inMemoryFarmers) {
+      const newMem = {
+        _id: farmer?._id || new mongoose.Types.ObjectId(),
+        phone: memKey,
+        name: farmer?.name || `Farmer ${memKey.slice(-4)}`,
+        pushToken: tokenStr
+      };
+      inMemoryFarmers.set(memKey, newMem);
+      if (!farmer) farmer = newMem;
+    }
+
+    if (!farmer) {
+      const err = new Error('Farmer record not found');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    return {
+      pushToken: tokenStr,
+      user: {
+        id: farmer._id,
+        phone: farmer.phone,
+        name: farmer.name,
+        preferredLanguage: farmer.preferredLanguage,
+        pushToken: tokenStr
+      }
+    };
   }
 };
 

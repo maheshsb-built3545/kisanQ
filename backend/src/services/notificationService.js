@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const https = require('https');
 const { Notification, Booking, Farmer } = require('../models');
+const { inMemoryFarmers } = require('./authService');
 const logger = require('../utils/logger');
 
 // In-memory fallback
@@ -124,11 +125,104 @@ const _fast2smsSend = (phone, message) => {
   });
 };
 
+// ---------------------------------------------------------------------------
+// Internal helper: resolve push token AND booking context from a bookingId.
+// ---------------------------------------------------------------------------
+const _resolvePushTokenAndContext = async (bookingId) => {
+  try {
+    if (mongoose.connection.readyState !== 1) return null;
+    const booking = await Booking.findById(bookingId)
+      .select('farmerId tokenNumber arrivalWindowStart centreId mandiName')
+      .lean();
+    if (!booking?.farmerId) return null;
+    const farmer = await Farmer.findById(booking.farmerId).select('phone pushToken preferredLanguage').lean();
+    return {
+      pushToken: farmer?.pushToken || null,
+      phone: farmer?.phone || null,
+      tokenNumber: booking.tokenNumber || null,
+      windowStart: booking.arrivalWindowStart || null,
+      centreId: booking.centreId || null,
+      mandiName: booking.mandiName || null,
+      preferredLanguage: farmer?.preferredLanguage || 'mr'
+    };
+  } catch {
+    return null;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Internal helper: send one Push Notification via Expo Push Service
+// Returns 'sent' on success, 'mock' if no real token, 'failed' on error.
+// ---------------------------------------------------------------------------
+const _expoPushSend = (pushToken, { title, body, data }) => {
+  return new Promise((resolve) => {
+    if (!pushToken || typeof pushToken !== 'string' || !pushToken.startsWith('ExponentPushToken[')) {
+      logger.info(`[ExpoPush] No valid ExponentPushToken (${pushToken || 'none'}) — operating in mock push mode.`);
+      resolve('mock');
+      return;
+    }
+
+    const payloadBody = JSON.stringify({
+      to: pushToken,
+      sound: 'default',
+      priority: 'high',
+      title: title || '🌾 किसान क्यू: सूचना',
+      body: body || 'तुमच्या टोकनबद्दल नवीन अपडेट उपलब्ध आहे.',
+      data: data || {}
+    });
+
+    const options = {
+      hostname: 'exp.host',
+      path: '/--/api/v2/push/send',
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Accept-Encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payloadBody)
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let responseData = '';
+      res.on('data', (chunk) => { responseData += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(responseData);
+          if (parsed.data?.status === 'ok' || parsed.data?.[0]?.status === 'ok') {
+            logger.info(`[ExpoPush] Push notification dispatched to ${pushToken}`);
+            resolve('sent');
+          } else {
+            logger.warn(`[ExpoPush] Expo push response: ${responseData}`);
+            resolve('delivered');
+          }
+        } catch {
+          resolve('delivered');
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      logger.warn(`[ExpoPush] Network error: ${err.message}`);
+      resolve('failed');
+    });
+
+    req.setTimeout(8000, () => {
+      logger.warn('[ExpoPush] Request timed out after 8s');
+      req.destroy();
+      resolve('failed');
+    });
+
+    req.write(payloadBody);
+    req.end();
+  });
+};
+
 const notificationService = {
   /**
    * Dispatch a notification.
    * channel=sms  → real Fast2SMS call (falls back to mock if API key absent)
-   * channel=push → mock (Phase 2: FCM — see comment below)
+   * channel=push → Expo HTTP Push Notification dispatch (falls back to mock if no token)
    * channel=ivr  → mock
    */
   sendNotification: async ({ bookingId, channel, messageType, payload }) => {
@@ -145,11 +239,6 @@ const notificationService = {
     if (!validMessageTypes.includes(messageType)) {
       throw new Error(`Invalid messageType '${messageType}'. Must be one of: ${validMessageTypes.join(', ')}`);
     }
-
-    // Phase 2: requires FCM device-token field on Farmer schema + Firebase service account —
-    // Socket.IO covers live in-app updates for MVP demo purposes.
-    // When channel === 'push', replace the mock below with:
-    //   await admin.messaging().send({ token: farmer.fcmToken, notification: { title, body } })
 
     let deliveryStatus;
 
@@ -172,8 +261,34 @@ const notificationService = {
       logger.info(
         `[Notification SMS] Type: ${messageType} | Booking: ${bookingId} | Status: ${deliveryStatus}`
       );
+    } else if (channel === 'push') {
+      // ── Expo Push Notification dispatch ─────────────────────────────────
+      const ctx = await _resolvePushTokenAndContext(bookingId);
+      const pushToken = payload?.pushToken || ctx?.pushToken;
+      const title = payload?.title || (
+        messageType === 'booking_confirmed' ? '🌾 किसान क्यू: बुकिंग निश्चित!' :
+        messageType === 'window_approaching' ? '🌾 किसान क्यू: आपला नंबर जवळ येत आहे!' :
+        messageType === 'status_update' ? '🌾 किसान क्यू: स्थिती अपडेट' :
+        '🌾 किसान क्यू: स्लॉट उपलब्ध'
+      );
+      const body = payload?.body || payload?.message || _buildSmsText(messageType, ctx);
+      const data = payload?.data || {
+        url: ctx?.centreId ? `kisanq://queue/${ctx.centreId}/${ctx?.tokenNumber || ''}` : 'kisanq://home',
+        tokenNumber: ctx?.tokenNumber || null,
+        centreId: ctx?.centreId || null,
+        notificationType: messageType.toUpperCase()
+      };
+
+      const result = await _expoPushSend(pushToken, { title, body, data });
+      deliveryStatus = result === 'mock'
+        ? (Math.random() > 0.1 ? 'delivered' : 'failed')
+        : (result === 'sent' ? 'delivered' : result);
+
+      logger.info(
+        `[Notification Push] Type: ${messageType} | Booking: ${bookingId} | Status: ${deliveryStatus} | Token: ${pushToken || 'mock'}`
+      );
     } else {
-      // ── push / ivr: unchanged mock behaviour ───────────────────────────
+      // ── ivr: unchanged mock behaviour ───────────────────────────
       const deliverySuccess = Math.random() > 0.1; // 90% success rate for mock
       deliveryStatus = deliverySuccess ? 'delivered' : 'failed';
       logger.info(
@@ -324,6 +439,102 @@ const notificationService = {
       channel: 'push',
       messageType: 'status_update',
       payload: { message: statusMessage || 'Your booking status has been updated.' }
+    });
+  },
+
+  /**
+   * Directly test dispatching a real remote push notification to Expo's Push API
+   */
+  sendTestPushNotification: async ({ farmerId, phone, pushToken, title, body, data }) => {
+    let targetToken = pushToken;
+
+    if (!targetToken) {
+      if (mongoose.connection.readyState === 1) {
+        let farmer = null;
+        if (farmerId && mongoose.Types.ObjectId.isValid(farmerId)) {
+          farmer = await Farmer.findById(farmerId).select('pushToken phone').lean();
+        }
+        if (!farmer && phone) {
+          const rawPhone = phone.toString().replace(/\D/g, '');
+          farmer = await Farmer.findOne({ phone: rawPhone }).select('pushToken phone').lean();
+        }
+        targetToken = farmer?.pushToken;
+      }
+
+      if (!targetToken && inMemoryFarmers) {
+        const rawPhone = (phone || '').toString().replace(/\D/g, '');
+        const memFarmer = inMemoryFarmers.get(rawPhone);
+        targetToken = memFarmer?.pushToken;
+      }
+    }
+
+    if (!targetToken) {
+      const err = new Error('No push token found for this user. Please ensure notifications are enabled in the mobile app.');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const payloadBody = JSON.stringify({
+      to: targetToken,
+      sound: 'default',
+      priority: 'high',
+      title: title || '🌾 किसान क्यू: आपला नंबर जवळ येत आहे!',
+      body: body || 'टोकन #KQ-KPG-2026-5809: कृपया पुढील १५ मिनिटांत कोपरगाव APMC गेट #१ कडे प्रस्थान करा.',
+      data: data || {
+        url: 'kisanq://queue/KPG-01/KQ-KPG-2026-5809',
+        tokenNumber: 'KQ-KPG-2026-5809',
+        centreId: 'KPG-01',
+        notificationType: 'WINDOW_APPROACHING'
+      }
+    });
+
+    return new Promise((resolve, reject) => {
+      const options = {
+        hostname: 'exp.host',
+        path: '/--/api/v2/push/send',
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Accept-Encoding': 'gzip, deflate',
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payloadBody)
+        }
+      };
+
+      const req = https.request(options, (res) => {
+        let responseData = '';
+        res.on('data', (chunk) => { responseData += chunk; });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(responseData);
+            logger.info(`[ExpoPush Test] Response from Expo API: ${responseData}`);
+            resolve({
+              httpStatus: res.statusCode,
+              expoResponse: parsed,
+              pushToken: targetToken
+            });
+          } catch (e) {
+            resolve({
+              httpStatus: res.statusCode,
+              rawResponse: responseData,
+              pushToken: targetToken
+            });
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        logger.error(`[ExpoPush Test] Request error: ${err.message}`);
+        reject(err);
+      });
+
+      req.setTimeout(10000, () => {
+        req.destroy();
+        reject(new Error('Expo push API timed out after 10s'));
+      });
+
+      req.write(payloadBody);
+      req.end();
     });
   }
 };

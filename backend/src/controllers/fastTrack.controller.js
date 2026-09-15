@@ -34,7 +34,7 @@ const fastTrackController = {
       return successResponse(
         res,
         result.request,
-        `Fast-Track Priority requested at Tier ${tier}% discount (Final rate: ₹${result.request.discountedPrice}/Qtl). Pending staff verification.`,
+        `Fast-Track Priority requested at ₹${result.request.tier}/Qtl discount (Final rate: ₹${result.request.discountedPrice}/Qtl). Pending staff verification.`,
         201
       );
     } catch (error) {

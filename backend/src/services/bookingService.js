@@ -63,6 +63,11 @@ const bookingService = {
       throw new Error('Arrival window end time must be strictly after start time');
     }
 
+    // Reject past arrival windows or slots with less than 15 minutes remaining
+    if (windowEnd.getTime() <= (Date.now() + 15 * 60 * 1000)) {
+      throw new Error('The requested arrival window has already expired or has less than 15 minutes remaining.');
+    }
+
     // 1. Deduplication Check: Prevent the same farmer from booking duplicate slots in the same window
     let duplicateBooking = null;
     try {

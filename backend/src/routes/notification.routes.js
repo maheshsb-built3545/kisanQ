@@ -28,4 +28,11 @@ router.post(
   notificationController.retryNotification
 );
 
+// Dispatch a real test push notification (authenticated farmer / user)
+router.post(
+  '/test-push',
+  authenticate,
+  notificationController.sendTestPush
+);
+
 module.exports = router;

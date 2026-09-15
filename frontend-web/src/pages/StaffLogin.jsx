@@ -1,69 +1,35 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import GovHeader from '../components/common/GovHeader';
 import {
-  ShieldCheck, Lock, User, ArrowRight, Sprout, Sparkles,
-  Building2, Scale, Leaf, Banknote, ShieldAlert, CheckCircle2,
-  ChevronRight, BadgeCheck, Activity, Truck, Cpu, Radio,
-  Layers, MapPin, Gauge, KeyRound, AlertTriangle, Fingerprint,
-  RefreshCw, CheckCircle, Shield, ArrowUpRight, ArrowLeft, Clock
+  ShieldCheck, Lock, User, ArrowRight, Sparkles,
+  Building2, Scale, Leaf, Banknote, CheckCircle2,
+  Activity, MapPin, KeyRound, AlertTriangle,
+  ArrowLeft, Clock
 } from 'lucide-react';
+import { ActionButton, StatusBadge } from '../components/staff';
 import { MANDIS } from '../services/storageService';
+import {
+  joinMandiRoom, onNewBooking, onStageUpdated,
+  onTokenCompleted, onTokenCancelled, onQueueSlotFreed
+} from '../services/socketService';
+import { TOKEN_STATUS, normalizeStatus, isTokenActive } from '../utils/statusEnums';
 
-// ─── Live Regional Telemetry ─────────────────────────────────────────────────
-const REGIONAL_HEALTH_METRICS = [
-  {
-    mandiId: 'KPG-01',
-    mandiName: 'APMC Kopargaon',
-    code: 'MH-KPG-01',
-    status: 'High Volume',
-    trucksInYard: 42,
-    gateVelocity: '3.8 min/truck',
-    scaleStatus: 'Weighbridge Calibrated',
-    loadPercentage: 85,
-  },
-  {
-    mandiId: 'SRD-02',
-    mandiName: 'APMC Shirdi',
-    code: 'MH-SRD-02',
-    status: 'Optimal Flow',
-    trucksInYard: 18,
-    gateVelocity: '2.9 min/truck',
-    scaleStatus: 'Weighbridge Calibrated',
-    loadPercentage: 45,
-  },
-  {
-    mandiId: 'RHT-03',
-    mandiName: 'APMC Rahata',
-    code: 'MH-RHT-03',
-    status: 'Normal Intake',
-    trucksInYard: 12,
-    gateVelocity: '3.1 min/truck',
-    scaleStatus: 'Pitless Scale Active',
-    loadPercentage: 20,
-  },
-  {
-    mandiId: 'VJP-04',
-    mandiName: 'APMC Vaijapur',
-    code: 'MH-VJP-04',
-    status: 'Active Intake',
-    trucksInYard: 48,
-    gateVelocity: '4.5 min/truck',
-    scaleStatus: 'Scales 1 & 2 Active',
-    loadPercentage: 90,
-  },
-  {
-    mandiId: 'SRP-05',
-    mandiName: 'APMC Shrirampur',
-    code: 'MH-SRP-05',
-    status: 'Optimal Flow',
-    trucksInYard: 22,
-    gateVelocity: '3.4 min/truck',
-    scaleStatus: 'Weighbridge Calibrated',
-    loadPercentage: 55,
-  },
-];
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+// 5 Active Operational Mandis for Maharashtra APMC Operations
+const ACTIVE_MANDIS = MANDIS.filter((m) =>
+  ['KPG-01', 'SRD-02', 'RHT-03', 'VJP-04', 'SRP-05'].includes(m.id)
+);
+
+const MANDI_FACILITY_CONFIG = {
+  'KPG-01': 'Weighbridge Calibrated',
+  'SRD-02': 'Weighbridge Calibrated',
+  'RHT-03': 'Pitless Scale Active',
+  'VJP-04': 'Scales 1 & 2 Active',
+  'SRP-05': 'Weighbridge Calibrated',
+};
 
 // ─── Station Roles ───────────────────────────────────────────────────────────
 const PHYSICAL_STATION_ROLES = [
@@ -153,13 +119,170 @@ export default function StaffLogin() {
 
   // Selected Mandi Object
   const selectedMandi = useMemo(() => {
-    return MANDIS.find((m) => m.id === selectedMandiId) || MANDIS[0];
+    return ACTIVE_MANDIS.find((m) => m.id === selectedMandiId) || ACTIVE_MANDIS[0];
   }, [selectedMandiId]);
 
-  // Selected Mandi Telemetry
-  const activeTelemetry = useMemo(() => {
-    return REGIONAL_HEALTH_METRICS.find((m) => m.mandiId === selectedMandiId) || REGIONAL_HEALTH_METRICS[0];
-  }, [selectedMandiId]);
+  // Live Yard Telemetry State
+  const [telemetryData, setTelemetryData] = useState({
+    isLoading: true,
+    isLive: false,
+    trucksInYard: 0,
+    totalActiveQueue: 0,
+    gateVelocity: '~3.5 min/truck',
+    isPaceLive: false,
+    paceSamplesCount: 0,
+    loadPercentage: 0,
+    status: 'Connecting…',
+    code: 'MH-KPG-01',
+    mandiName: 'APMC Kopargaon',
+    scaleStatus: 'Weighbridge Calibrated',
+  });
+
+  // Fetch Live Telemetry from Backend Endpoints
+  const fetchLiveTelemetry = useCallback(async (targetMandiId) => {
+    const mandiObj = ACTIVE_MANDIS.find((m) => m.id === targetMandiId) || ACTIVE_MANDIS[0];
+    try {
+      const [centresRes, tokensRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/centres`, { signal: AbortSignal.timeout(3000) }),
+        fetch(`${API_BASE}/tokens/mandi/${targetMandiId}`, { signal: AbortSignal.timeout(3000) }),
+      ]);
+
+      let centreData = null;
+      if (centresRes.status === 'fulfilled' && centresRes.value.ok) {
+        const json = await centresRes.value.json();
+        const centres = Array.isArray(json) ? json : json?.data || [];
+        centreData = centres.find((c) => c.code === targetMandiId || c.name === mandiObj.name);
+      }
+
+      let tokens = [];
+      if (tokensRes.status === 'fulfilled' && tokensRes.value.ok) {
+        const json = await tokensRes.value.json();
+        tokens = Array.isArray(json?.tokens) ? json.tokens : (Array.isArray(json) ? json : []);
+      }
+
+      const activeTokens = tokens.filter((t) => isTokenActive(t.status));
+
+      // Trucks physically inside yard: past gate check-in and not completed/cancelled
+      const yardTrucks = tokens.filter((t) => {
+        const norm = normalizeStatus(t.status);
+        if (norm === TOKEN_STATUS.COMPLETED || norm === TOKEN_STATUS.CANCELLED) return false;
+        const isPastGate = (t.currentStageIndex !== undefined && t.currentStageIndex > 0) ||
+          (t.stages?.[0]?.status === 'completed' || t.stages?.[0]?.status === 'Completed') ||
+          ['GATE_IN', 'INSPECTED', 'WEIGHED', 'PROCUREMENT', 'GATE_EXIT_REQUESTED', 'CHECKED_IN'].includes(t.status);
+        return isPastGate;
+      });
+
+      // Live Gate Pace Calculation from stage 0 completed timestamps
+      const checkInTimestamps = tokens
+        .map((t) => {
+          const s0 = t.stages?.[0];
+          if (s0 && (s0.status === 'completed' || s0.status === 'Completed' || t.currentStageIndex > 0)) {
+            const ts = s0.completedAt || s0.timestamp || t.createdAt;
+            return ts ? new Date(ts).getTime() : null;
+          }
+          return null;
+        })
+        .filter((ts) => ts && !isNaN(ts))
+        .sort((a, b) => a - b);
+
+      let isPaceLive = false;
+      let gateVelocityStr = '~3.5 min/truck';
+      let paceSamplesCount = 0;
+
+      if (checkInTimestamps.length >= 2) {
+        const deltasMin = [];
+        for (let i = 1; i < checkInTimestamps.length; i++) {
+          const deltaMs = checkInTimestamps[i] - checkInTimestamps[i - 1];
+          const deltaMin = deltaMs / (60 * 1000);
+          if (deltaMin > 0 && deltaMin < 120) {
+            deltasMin.push(deltaMin);
+          }
+        }
+        if (deltasMin.length > 0) {
+          const avg = deltasMin.reduce((a, b) => a + b, 0) / deltasMin.length;
+          gateVelocityStr = `${Math.max(1.0, Math.min(15.0, avg)).toFixed(1)} min/truck`;
+          isPaceLive = true;
+          paceSamplesCount = checkInTimestamps.length;
+        }
+      }
+
+      // Dynamic Capacity & Status
+      const capacity = centreData?.totalCapacity || 50;
+      const computedUtilization = Math.min(100, Math.round((activeTokens.length / capacity) * 100));
+      const utilization = (centreData && centreData.utilizationPercent > 0)
+        ? Math.max(centreData.utilizationPercent, computedUtilization)
+        : computedUtilization;
+
+      let dynamicStatus = 'Optimal Flow';
+      if (utilization > 85) {
+        dynamicStatus = 'High Volume';
+      } else if (utilization > 50) {
+        dynamicStatus = 'Active Intake';
+      } else if (activeTokens.length > 0) {
+        dynamicStatus = 'Normal Intake';
+      } else {
+        dynamicStatus = 'Idle Intake';
+      }
+
+      setTelemetryData({
+        isLoading: false,
+        isLive: true,
+        trucksInYard: yardTrucks.length,
+        totalActiveQueue: activeTokens.length,
+        gateVelocity: gateVelocityStr,
+        isPaceLive,
+        paceSamplesCount,
+        loadPercentage: utilization,
+        status: dynamicStatus,
+        code: mandiObj.code,
+        mandiName: mandiObj.name,
+        scaleStatus: MANDI_FACILITY_CONFIG[targetMandiId] || 'Weighbridge Calibrated',
+      });
+    } catch (err) {
+      console.warn('[StaffLogin] Live telemetry fetch error:', err.message);
+      setTelemetryData({
+        isLoading: false,
+        isLive: false,
+        trucksInYard: 0,
+        totalActiveQueue: 0,
+        gateVelocity: '--',
+        isPaceLive: false,
+        paceSamplesCount: 0,
+        loadPercentage: 0,
+        status: 'Telemetry Offline',
+        code: mandiObj.code,
+        mandiName: mandiObj.name,
+        scaleStatus: MANDI_FACILITY_CONFIG[targetMandiId] || 'Scale Offline',
+      });
+    }
+  }, []);
+
+  // Subscribe to live telemetry and Socket.IO real-time stream
+  useEffect(() => {
+    fetchLiveTelemetry(selectedMandiId);
+    joinMandiRoom(selectedMandiId);
+
+    const handleSocketUpdate = (data) => {
+      const eventMandi = data?.mandiId || data?.token?.mandiId;
+      if (!eventMandi || eventMandi === selectedMandiId || eventMandi.startsWith(selectedMandiId.split('-')[0])) {
+        fetchLiveTelemetry(selectedMandiId);
+      }
+    };
+
+    const unsubBooking = onNewBooking(handleSocketUpdate);
+    const unsubStage = onStageUpdated(handleSocketUpdate);
+    const unsubCompleted = onTokenCompleted(handleSocketUpdate);
+    const unsubCancelled = onTokenCancelled(handleSocketUpdate);
+    const unsubFreed = onQueueSlotFreed(handleSocketUpdate);
+
+    return () => {
+      unsubBooking?.();
+      unsubStage?.();
+      unsubCompleted?.();
+      unsubCancelled?.();
+      unsubFreed?.();
+    };
+  }, [selectedMandiId, fetchLiveTelemetry]);
 
   // Countdown timer for 2FA OTP Challenge
   useEffect(() => {
@@ -261,8 +384,7 @@ export default function StaffLogin() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-emerald-600 selection:text-white">
-      {/* ── Modern Navbar ────────────────────────────────────────── */}
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
       <GovHeader
         portalType="staff"
         activeMandi={selectedMandi}
@@ -270,15 +392,13 @@ export default function StaffLogin() {
         showPortalSwitch={true}
       />
 
-      {/* ── Main Content Area ────────────────────────────────────── */}
       <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 sm:py-12 flex-1">
-        
         {/* Header Section */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold mb-2">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>APMC Mandi Operations Desk</span>
+              <span>APMC Mandi Operations Terminal</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
               Operational Terminal Access
@@ -288,7 +408,7 @@ export default function StaffLogin() {
             </p>
           </div>
 
-          {/* Quick Mandi Centre Selector */}
+          {/* Center Selector */}
           <div className="flex items-center gap-2 bg-white p-2 rounded-2xl border border-slate-200 shadow-xs">
             <MapPin className="w-4 h-4 text-emerald-600 ml-1" />
             <span className="text-xs font-bold text-slate-500">Mandi:</span>
@@ -297,7 +417,7 @@ export default function StaffLogin() {
               onChange={(e) => setSelectedMandiId(e.target.value)}
               className="bg-slate-50 hover:bg-slate-100 text-slate-800 text-xs font-bold py-1.5 px-3 rounded-xl border border-slate-200 outline-none cursor-pointer transition-colors"
             >
-              {MANDIS.map((m) => (
+              {ACTIVE_MANDIS.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name} ({m.code})
                 </option>
@@ -306,7 +426,59 @@ export default function StaffLogin() {
           </div>
         </div>
 
-        {/* Station Quick Select Grid */}
+        {/* Live Yard Telemetry Strip */}
+        <div className="bg-slate-900 text-white rounded-2xl p-4 mb-6 border border-slate-800 shadow-lg flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400">
+              <Activity className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black uppercase tracking-wider text-emerald-400">Live Yard Telemetry</span>
+                <span className="text-[10px] font-mono bg-emerald-950 border border-emerald-500/40 text-emerald-300 px-2 py-0.5 rounded-full">
+                  {telemetryData.isLoading ? '...' : telemetryData.code}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {telemetryData.mandiName} · {telemetryData.scaleStatus}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-5 sm:gap-8 flex-wrap">
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Vehicles In Yard</span>
+              <span className="text-sm font-black font-mono text-white flex items-center gap-1.5 mt-0.5">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                {telemetryData.isLoading ? '--' : `${telemetryData.trucksInYard} trucks`}
+              </span>
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Gate Velocity</span>
+              <span className="text-sm font-black font-mono text-emerald-400 mt-0.5 block">
+                {telemetryData.isLoading ? '--' : telemetryData.gateVelocity}
+              </span>
+              {telemetryData.isPaceLive ? (
+                <span className="text-[9px] font-bold text-emerald-400 flex items-center gap-1 mt-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  ● Live Pace ({telemetryData.paceSamplesCount})
+                </span>
+              ) : (
+                <span className="text-[9px] font-medium text-slate-400 block mt-0.5">
+                  ○ Calibrated Std
+                </span>
+              )}
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Intake Load</span>
+              <span className="text-sm font-black font-mono text-cyan-300 mt-0.5 block">
+                {telemetryData.isLoading ? '--%' : `${telemetryData.loadPercentage}% Cap`}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Station Selection Grid */}
         <div className="bg-white rounded-2xl border border-slate-200 p-4 mb-8 shadow-xs">
           <div className="flex items-center justify-between gap-2 mb-3">
             <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
@@ -325,7 +497,7 @@ export default function StaffLogin() {
                   key={station.id}
                   type="button"
                   onClick={() => handleStationSelect(station)}
-                  className={`flex items-center gap-2 p-2.5 rounded-xl border text-left transition-all ${
+                  className={`flex items-center gap-2 p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
                     isSelected
                       ? 'bg-emerald-50 border-emerald-500 shadow-xs ring-2 ring-emerald-500/20'
                       : 'bg-slate-50 border-slate-200 hover:border-slate-300 hover:bg-white'
@@ -352,18 +524,15 @@ export default function StaffLogin() {
 
         {/* Two-Column Grid: Station Details & Auth Form */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          
-          {/* Left: Selected Station Overview & Mandi Telemetry */}
+          {/* Left: Station Overview & Telemetry */}
           <div className="lg:col-span-7 space-y-6">
-            
-            {/* Active Station Card */}
             <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-xs">
               <div className="flex items-center gap-4 mb-4">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-500/20 flex items-center justify-center shrink-0">
                   <selectedStation.icon className="w-6 h-6" />
                 </div>
                 <div>
-                  <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">
+                  <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider">
                     Selected Duty Desk
                   </span>
                   <h2 className="text-xl font-extrabold text-slate-900">
@@ -392,7 +561,7 @@ export default function StaffLogin() {
               </div>
             </div>
 
-            {/* Mandi Yard Telemetry Mini Card */}
+            {/* Yard Telemetry */}
             <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-xs">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
@@ -401,33 +570,39 @@ export default function StaffLogin() {
                     Live Yard Telemetry: {selectedMandi.name}
                   </h3>
                 </div>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  {activeTelemetry.status}
-                </span>
+                <StatusBadge status={telemetryData.isLive ? 'ONLINE' : 'OFFLINE'} size="xs">
+                  {telemetryData.status}
+                </StatusBadge>
               </div>
 
               <div className="grid grid-cols-3 gap-3 text-center">
                 <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
-                  <p className="text-xl font-extrabold text-slate-900 font-mono">{activeTelemetry.trucksInYard}</p>
+                  <p className="text-xl font-extrabold text-slate-900 font-mono">
+                    {telemetryData.isLoading ? '--' : telemetryData.trucksInYard}
+                  </p>
                   <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Vehicles in Yard</p>
                 </div>
                 <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
-                  <p className="text-xl font-extrabold text-slate-900 font-mono">{activeTelemetry.gateVelocity}</p>
-                  <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Gate Pace</p>
+                  <p className="text-xl font-extrabold text-slate-900 font-mono">
+                    {telemetryData.isLoading ? '--' : telemetryData.gateVelocity}
+                  </p>
+                  <p className="text-[10px] font-semibold text-slate-500 mt-0.5">
+                    Gate Pace {telemetryData.isPaceLive ? '(● Live)' : '(○ Std)'}
+                  </p>
                 </div>
                 <div className="p-3 rounded-xl bg-slate-50 border border-slate-100">
-                  <p className="text-xl font-extrabold text-emerald-600 font-mono">{activeTelemetry.loadPercentage}%</p>
+                  <p className="text-xl font-extrabold text-emerald-600 font-mono">
+                    {telemetryData.isLoading ? '--%' : `${telemetryData.loadPercentage}%`}
+                  </p>
                   <p className="text-[10px] font-semibold text-slate-500 mt-0.5">Intake Load</p>
                 </div>
               </div>
             </div>
-
           </div>
 
-          {/* Right: Modern 2FA Sign-In Card */}
+          {/* Right: 2FA Sign-In Card */}
           <div className="lg:col-span-5">
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-200/50 p-6 sm:p-8">
-              
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-xl p-6 sm:p-8">
               <div className="mb-6">
                 <div className="flex items-center justify-between mb-1">
                   <h3 className="text-lg font-bold text-slate-900">
@@ -451,10 +626,9 @@ export default function StaffLogin() {
                 </div>
               )}
 
-              {/* ── STEP 1: CREDENTIALS & ROLE MATCH FORM ───────────────────── */}
+              {/* Step 1 Form */}
               {authStep === 1 && (
                 <form onSubmit={handleVerifyCredentials} className="space-y-4">
-                  
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5">
                       Officer Mobile Number
@@ -511,34 +685,29 @@ export default function StaffLogin() {
                     <span className="text-emerald-700 font-bold">{selectedStation.roleLabel}</span>
                   </div>
 
-                  <button
+                  <ActionButton
                     type="submit"
-                    disabled={isLoading}
-                    className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 mt-4 cursor-pointer disabled:opacity-50"
+                    variant="primary"
+                    size="md"
+                    fullWidth
+                    isLoading={isLoading}
+                    loadingText="Verifying Role…"
+                    rightIcon={ArrowRight}
                   >
-                    {isLoading ? (
-                      <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    ) : (
-                      <>
-                        <span>Verify Role & Request 2FA OTP</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
-
+                    Verify Role & Request 2FA OTP
+                  </ActionButton>
                 </form>
               )}
 
-              {/* ── STEP 2: CLEAN 6-DIGIT OTP VERIFICATION FORM ─────────────── */}
+              {/* Step 2 Form */}
               {authStep === 2 && (
                 <form onSubmit={handleVerifyOtp} className="space-y-4">
-                  
                   <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Clock className="w-4 h-4 text-emerald-600 shrink-0" />
                       <span>OTP Challenge Valid:</span>
                     </div>
-                    <span className="font-mono font-black text-emerald-800">
+                    <span className="font-mono font-bold text-emerald-800">
                       {Math.floor(otpSecondsLeft / 60)}:{(otpSecondsLeft % 60).toString().padStart(2, '0')}
                     </span>
                   </div>
@@ -556,26 +725,24 @@ export default function StaffLogin() {
                         placeholder="••••••"
                         value={otp}
                         onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
-                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-base font-black text-slate-900 text-center tracking-[0.4em] focus:outline-none focus:border-emerald-500 focus:bg-white font-mono"
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-base font-bold text-slate-900 text-center tracking-[0.4em] focus:outline-none focus:border-emerald-500 focus:bg-white font-mono"
                         required
                       />
                     </div>
                   </div>
 
-                  <button
+                  <ActionButton
                     type="submit"
-                    disabled={isLoading || otp.length !== 6 || otpSecondsLeft === 0}
-                    className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 mt-4 cursor-pointer disabled:opacity-50"
+                    variant="primary"
+                    size="md"
+                    fullWidth
+                    isLoading={isLoading}
+                    loadingText="Signing in…"
+                    disabled={otp.length !== 6 || otpSecondsLeft === 0}
+                    rightIcon={CheckCircle2}
                   >
-                    {isLoading ? (
-                      <span className="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    ) : (
-                      <>
-                        <span>Verify OTP & Sign In to Terminal</span>
-                        <CheckCircle2 className="w-4 h-4" />
-                      </>
-                    )}
-                  </button>
+                    Verify OTP & Sign In
+                  </ActionButton>
 
                   <div className="pt-2 text-center">
                     <button
@@ -590,7 +757,6 @@ export default function StaffLogin() {
                       <span>Back to Station & Credentials</span>
                     </button>
                   </div>
-
                 </form>
               )}
 
@@ -602,14 +768,10 @@ export default function StaffLogin() {
                   <span>← Return to Citizen Farmer Portal</span>
                 </Link>
               </div>
-
             </div>
           </div>
-
         </div>
-
       </div>
     </div>
   );
 }
-

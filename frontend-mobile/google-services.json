@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "552183414893",
+    "project_id": "kisanq-production",
+    "storage_bucket": "kisanq-production.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:552183414893:android:1a0580199d05d24d233f64",
+        "android_client_info": {
+          "package_name": "com.aveniq.kisanq"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAN87KoHJBaQWpoIDfZTvUZR9FrSOxPDWQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

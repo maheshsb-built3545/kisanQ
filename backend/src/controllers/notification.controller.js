@@ -44,6 +44,30 @@ const notificationController = {
     } catch (error) {
       return errorResponse(res, error.message, 400);
     }
+  },
+
+  /**
+   * POST /api/notifications/test-push - Send a test push notification to the authenticated farmer's device
+   */
+  sendTestPush: async (req, res) => {
+    try {
+      const farmerId = req.user?.id || req.user?._id;
+      const phone = req.user?.phone;
+      const { pushToken, title, body, data } = req.body || {};
+
+      const result = await notificationService.sendTestPushNotification({
+        farmerId,
+        phone,
+        pushToken,
+        title,
+        body,
+        data
+      });
+
+      return successResponse(res, result, 'Test push notification dispatched to Expo');
+    } catch (error) {
+      return errorResponse(res, error.message, error.statusCode || 400);
+    }
   }
 };
 

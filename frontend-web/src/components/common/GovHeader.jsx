@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Globe, Clock, Sparkles, Building2, User, ArrowRight, Shield, Layers, RefreshCw } from 'lucide-react';
+import { Globe, Clock, Sparkles, Building2, User, ArrowRight, Shield, Layers, RefreshCw, LogOut } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { MANDIS } from '../../services/storageService';
 
@@ -12,13 +12,25 @@ export default function GovHeader({
   activeMandi = null,
   onMandiChange = null,
   onOpenResetModal = null,
+  onLogout = null,
 }) {
-  const { user, token } = useAuth();
+  const { user, token, logout } = useAuth();
+  const navigate = useNavigate();
   const [liveTime, setLiveTime] = useState('');
   const [fontSize, setFontSize] = useState('base');
 
   // Strictly bind displayed profile to an active session token matching current context
   const activeUserProfile = token && user ? user : null;
+
+  const handleLogout = async () => {
+    if (onLogout) {
+      await onLogout();
+    } else {
+      await logout();
+      console.log('[AuthContext] kisanq_token after logout:', localStorage.getItem('kisanq_token'));
+      navigate('/', { replace: true });
+    }
+  };
 
   // Live IST Clock ticking
   useEffect(() => {
@@ -179,15 +191,25 @@ export default function GovHeader({
               </button>
             )}
 
-            {/* User Profile Pill */}
+            {/* User Profile Pill & Logout */}
             {activeUserProfile && (
-              <div className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs">
-                <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-[11px]">
-                  {activeUserProfile.name ? activeUserProfile.name[0] : 'U'}
+              <div className="flex items-center gap-1.5">
+                <div className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+                  <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-[11px]">
+                    {activeUserProfile.name ? activeUserProfile.name[0] : 'U'}
+                  </div>
+                  <span className="font-semibold text-slate-800 max-w-[110px] truncate">
+                    {activeUserProfile.name || 'User'}
+                  </span>
                 </div>
-                <span className="font-semibold text-slate-800 max-w-[110px] truncate">
-                  {activeUserProfile.name || 'User'}
-                </span>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-500 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition-colors cursor-pointer"
+                  title="Logout Session"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
 

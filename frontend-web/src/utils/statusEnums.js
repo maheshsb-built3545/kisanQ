@@ -50,3 +50,57 @@ export function isTokenActive(status) {
   const norm = normalizeStatus(status);
   return norm !== TOKEN_STATUS.COMPLETED && norm !== TOKEN_STATUS.CANCELLED;
 }
+
+/**
+ * Range-based Queue Position formatting to avoid over-promising precision
+ * @param {number|string} pos - Queue position (1-based index)
+ * @param {string} lang - 'en' | 'mr' | 'hi'
+ * @returns {string} Range formatted string, e.g. "You are next", "1–3 ahead", "4–7 ahead"
+ */
+export function formatQueueRange(pos, lang = 'en') {
+  const num = Number(pos);
+  if (isNaN(num) || num <= 1) {
+    if (lang === 'mr') return 'पुढील नंबर तुमचा आहे';
+    if (lang === 'hi') return 'अगला नंबर आपका है';
+    return 'You are next';
+  }
+  const ahead = num - 1;
+  return formatVehiclesAheadRange(ahead, lang);
+}
+
+/**
+ * Range-based "Vehicles Ahead" formatting
+ * @param {number|string} ahead - Number of vehicles ahead
+ * @param {string} lang - 'en' | 'mr' | 'hi'
+ */
+export function formatVehiclesAheadRange(ahead, lang = 'en') {
+  const n = Number(ahead);
+  if (isNaN(n) || n <= 0) {
+    if (lang === 'mr') return 'पुढील नंबर तुमचा आहे';
+    if (lang === 'hi') return 'अगला नंबर आपका है';
+    return 'You are next';
+  }
+  if (n === 1) {
+    if (lang === 'mr') return '१ वाहन पुढे';
+    if (lang === 'hi') return '१ वाहन आगे';
+    return '1 ahead';
+  }
+  if (n <= 3) {
+    if (lang === 'mr') return '१–३ वाहने पुढे';
+    if (lang === 'hi') return '१–३ वाहन आगे';
+    return '1–3 ahead';
+  }
+  if (n <= 7) {
+    if (lang === 'mr') return '४–७ वाहने पुढे';
+    if (lang === 'hi') return '४–७ वाहन आगे';
+    return '4–7 ahead';
+  }
+  if (n <= 12) {
+    if (lang === 'mr') return '८–१२ वाहने पुढे';
+    if (lang === 'hi') return '८–१२ वाहन आगे';
+    return '8–12 ahead';
+  }
+  if (lang === 'mr') return '१०+ वाहने पुढे';
+  if (lang === 'hi') return '१०+ वाहन आगे';
+  return '10+ ahead';
+}

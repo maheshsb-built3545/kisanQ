@@ -14,6 +14,7 @@ const tokenRoutes = require('./token.routes');
 const farmerRoutes = require('./farmer.routes');
 const cropPriceRoutes = require('./cropPrice.routes');
 const fastTrackRoutes = require('./fastTrack.routes');
+const voiceBookingRoutes = require('./voiceBooking.routes');
 
 // Mount modular service routes
 router.use('/auth', authRoutes);
@@ -24,6 +25,8 @@ router.use('/farmers', farmerRoutes);
 router.use('/farmer', farmerRoutes);
 router.use('/bookings', bookingRoutes);
 router.use('/tokens', tokenRoutes);
+router.use('/voice-booking', voiceBookingRoutes);
+router.use('/voice', voiceBookingRoutes);
 
 router.use('/queue', queueRoutes);
 router.use('/centres', centreRoutes);

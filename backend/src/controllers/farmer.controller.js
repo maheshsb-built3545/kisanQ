@@ -28,6 +28,32 @@ const farmerController = {
     } catch (error) {
       return errorResponse(res, error.message, error.statusCode || 400);
     }
+  },
+
+  /**
+   * Update farmer's Expo push token
+   * PATCH /api/farmers/push-token
+   */
+  updatePushToken: async (req, res) => {
+    try {
+      const { pushToken } = req.body;
+      const farmerId = req.user?.id || req.user?._id;
+      const phone = req.user?.phone || req.body?.phone;
+
+      if (!pushToken) {
+        return errorResponse(res, 'pushToken string is required', 400);
+      }
+
+      const result = await farmerService.updatePushToken({
+        farmerId,
+        phone,
+        pushToken
+      });
+
+      return successResponse(res, result, 'Push token updated successfully');
+    } catch (error) {
+      return errorResponse(res, error.message, error.statusCode || 400);
+    }
   }
 };
 

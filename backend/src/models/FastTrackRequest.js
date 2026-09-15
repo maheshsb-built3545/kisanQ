@@ -31,10 +31,14 @@ const fastTrackRequestSchema = new mongoose.Schema(
     tier: {
       type: Number,
       enum: {
-        values: [2, 5, 10],
-        message: 'Tier must be 2, 5, or 10% discount'
+        values: [10, 20, 40, 2, 5],
+        message: 'Tier must be flat rate ₹10, ₹20, or ₹40/Qtl discount'
       },
       required: [true, 'Discount tier is required']
+    },
+    discountPerQuintal: {
+      type: Number,
+      default: 10
     },
     marketPriceAtRequest: {
       type: Number,

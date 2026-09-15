@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { pricesApi } from '../api';
 import GovHeader from '../components/common/GovHeader';
+import heroBg from '../assets/hero-bg.webp';
 import {
   Leaf, Sprout, ShieldCheck, Mic, Users, Clock, Layers,
   RefreshCw, Zap, Bot, ShieldAlert, Printer, Radio,
@@ -415,6 +416,169 @@ const MANDI_NAMES = {
   'LSG-06': 'APMC Lasalgaon',
 };
 
+// ─── Desktop Live Mandi Rates Ticker (Zero Re-renders, Desktop Mouse Drag & Auto-Marquee) ──────
+const DesktopMandiTicker = ({ mandiRates }) => {
+  const containerRef = useRef(null);
+  const isPausedRef = useRef(false);
+  const isDraggingRef = useRef(false);
+  const startXRef = useRef(0);
+  const startScrollLeftRef = useRef(0);
+  const hasDraggedRef = useRef(false);
+
+  // Duplicate rates array to guarantee a seamless infinite marquee loop
+  const displayRates =
+    mandiRates && mandiRates.length > 0
+      ? mandiRates.length < 6
+        ? [...mandiRates, ...mandiRates, ...mandiRates, ...mandiRates]
+        : [...mandiRates, ...mandiRates]
+      : [];
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let animationFrameId;
+    let lastTimestamp = null;
+    const scrollSpeed = 35; // readable horizontal velocity (px/sec)
+
+    const animate = (timestamp) => {
+      if (!lastTimestamp) lastTimestamp = timestamp;
+      const delta = (timestamp - lastTimestamp) / 1000;
+      lastTimestamp = timestamp;
+
+      // Auto-scroll only when not paused by mouse hover and not actively dragged
+      if (!isPausedRef.current && !isDraggingRef.current && container) {
+        const halfWidth = container.scrollWidth / 2;
+        if (halfWidth > 0) {
+          let nextScrollLeft = container.scrollLeft + scrollSpeed * delta;
+          if (nextScrollLeft >= halfWidth) {
+            nextScrollLeft -= halfWidth;
+          }
+          container.scrollLeft = nextScrollLeft;
+        }
+      }
+
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animationFrameId = requestAnimationFrame(animate);
+
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, [displayRates.length]);
+
+  // Desktop Mouse Event Handlers (Desktop Only - strictly no touch handlers)
+  const handleMouseEnter = () => {
+    isPausedRef.current = true;
+  };
+
+  const handleMouseLeave = () => {
+    isPausedRef.current = false;
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+      if (containerRef.current) {
+        containerRef.current.style.cursor = 'grab';
+        containerRef.current.style.removeProperty('user-select');
+      }
+    }
+  };
+
+  const handleMouseDown = (e) => {
+    if (e.button !== 0 || !containerRef.current) return;
+    isPausedRef.current = true;
+    isDraggingRef.current = true;
+    hasDraggedRef.current = false;
+    startXRef.current = e.pageX - containerRef.current.offsetLeft;
+    startScrollLeftRef.current = containerRef.current.scrollLeft;
+
+    containerRef.current.style.cursor = 'grabbing';
+    containerRef.current.style.userSelect = 'none';
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDraggingRef.current || !containerRef.current) return;
+    const x = e.pageX - containerRef.current.offsetLeft;
+    const distance = x - startXRef.current;
+
+    // Suppress child click events if mouse was dragged more than 3px
+    if (Math.abs(distance) > 3) {
+      hasDraggedRef.current = true;
+    }
+
+    let targetScroll = startScrollLeftRef.current - distance;
+    const halfWidth = containerRef.current.scrollWidth / 2;
+    if (halfWidth > 0) {
+      while (targetScroll >= halfWidth) targetScroll -= halfWidth;
+      while (targetScroll < 0) targetScroll += halfWidth;
+    }
+    containerRef.current.scrollLeft = targetScroll;
+  };
+
+  const handleMouseUp = () => {
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+      if (containerRef.current) {
+        containerRef.current.style.cursor = 'grab';
+        containerRef.current.style.removeProperty('user-select');
+      }
+    }
+  };
+
+  const handleClickCapture = (e) => {
+    if (hasDraggedRef.current) {
+      e.stopPropagation();
+      e.preventDefault();
+      hasDraggedRef.current = false;
+    }
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onClickCapture={handleClickCapture}
+      className="flex items-center gap-4 overflow-x-hidden py-0.5 scrollbar-none text-xs cursor-grab select-none flex-1 min-w-0"
+      style={{
+        scrollbarWidth: 'none',
+        msOverflowStyle: 'none',
+      }}
+    >
+      {displayRates.map((item, idx) => (
+        <div
+          key={idx}
+          className="flex items-center gap-2 whitespace-nowrap bg-slate-800/80 px-3 py-1 rounded-lg border border-slate-700/80 hover:border-slate-600 transition-colors shrink-0"
+        >
+          <span className="font-semibold text-slate-300 text-[11px]">{item.mandi}</span>
+          <span className="text-slate-500">·</span>
+          <span className="text-slate-100 font-bold">{item.crop}</span>
+          <span className="text-emerald-400 font-black">{item.rate}</span>
+          <span
+            className={`text-[10px] font-bold ${
+              item.trend.startsWith('+')
+                ? 'text-emerald-400'
+                : item.trend.startsWith('-')
+                ? 'text-rose-400'
+                : 'text-slate-400'
+            }`}
+          >
+            ({item.trend})
+          </span>
+          <span className="text-[9px] px-1.5 py-0.2 bg-emerald-950/80 text-emerald-300 border border-emerald-800/80 rounded uppercase font-medium">
+            {item.activeSlots} slots open
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 export default function Landing() {
   const navigate = useNavigate();
   const { login } = useAuth();
@@ -608,22 +772,7 @@ export default function Landing() {
             <span className="uppercase tracking-wider text-[11px] font-bold">Live Mandi Rates:</span>
           </div>
 
-          <div className="flex items-center gap-4 overflow-x-auto py-0.5 scrollbar-none text-xs">
-            {mandiRates.map((item, idx) => (
-              <div key={idx} className="flex items-center gap-2 whitespace-nowrap bg-slate-800/80 px-3 py-1 rounded-lg border border-slate-700/80">
-                <span className="font-semibold text-slate-300 text-[11px]">{item.mandi}</span>
-                <span className="text-slate-500">·</span>
-                <span className="text-slate-100 font-bold">{item.crop}</span>
-                <span className="text-emerald-400 font-black">{item.rate}</span>
-                <span className={`text-[10px] font-bold ${item.trend.startsWith('+') ? 'text-emerald-400' : item.trend.startsWith('-') ? 'text-rose-400' : 'text-slate-400'}`}>
-                  ({item.trend})
-                </span>
-                <span className="text-[9px] px-1.5 py-0.2 bg-emerald-950/80 text-emerald-300 border border-emerald-800/80 rounded uppercase font-medium">
-                  {item.activeSlots} slots open
-                </span>
-              </div>
-            ))}
-          </div>
+          <DesktopMandiTicker mandiRates={mandiRates} />
 
           <div className="hidden lg:flex items-center gap-2 shrink-0 text-[11px] text-slate-400 font-medium">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
@@ -632,12 +781,23 @@ export default function Landing() {
         </div>
       </div>
 
-      {/* ── Hero Section with Modern Auth Card ───────────────────── */}
-      <section className="relative z-10 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pt-10 pb-16 lg:pt-14 lg:pb-20">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
-          
-          {/* Left Column: Hero Content */}
-          <div className="lg:col-span-7 space-y-6">
+      {/* ── Hero Section with Modern Auth Card & Hero Background ─── */}
+      <section className="relative overflow-hidden bg-slate-100 border-b border-slate-200">
+        {/* High-Visibility APMC & Farmer Hero Graphic Backdrop */}
+        <div
+          className="absolute inset-0 bg-cover bg-center bg-no-repeat opacity-90 pointer-events-none"
+          style={{ backgroundImage: `url(${heroBg})` }}
+        />
+
+        {/* Soft Gradient Overlay for Text Readability without Obscuring Artwork */}
+        <div className="absolute inset-0 bg-gradient-to-r from-slate-50/85 via-slate-50/50 to-transparent pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-100/90 via-transparent to-black/10 pointer-events-none" />
+
+        <div className="relative z-10 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pt-10 pb-16 lg:pt-14 lg:pb-20">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
+            
+            {/* Left Column: Hero Content */}
+            <div className="lg:col-span-7 space-y-6">
             {/* Live Network Badge */}
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold shadow-xs">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
@@ -674,17 +834,19 @@ export default function Landing() {
               ))}
             </div>
 
-            {/* 1-Click Quick Demo Login Button */}
+            {/* 1-Click Quick Demo Login Button (Gated for Judge Demos) */}
             <div className="pt-2 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
-              <button
-                type="button"
-                onClick={handleQuickDemoLogin}
-                className="inline-flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm transition-all shadow-lg shadow-emerald-600/25 active:scale-[0.99]"
-              >
-                <Sparkles className="w-4 h-4 text-amber-300" />
-                <span>{t.auth.btnQuickDemo}</span>
-                <ChevronRight className="w-4 h-4" />
-              </button>
+              {(import.meta.env.VITE_SHOW_DEMO_LOGIN === 'true' || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('demo') === 'true')) && (
+                <button
+                  type="button"
+                  onClick={handleQuickDemoLogin}
+                  className="inline-flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm transition-all shadow-lg shadow-emerald-600/25 active:scale-[0.99]"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  <span>{t.auth.btnQuickDemo}</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              )}
 
               <Link
                 to="/staff-login"
@@ -919,7 +1081,8 @@ export default function Landing() {
           </div>
 
         </div>
-      </section>
+      </div>
+    </section>
 
       {/* ── Feature Showcase ────────────────────────────────────── */}
       <section className="bg-white py-16 lg:py-24 border-t border-slate-200">

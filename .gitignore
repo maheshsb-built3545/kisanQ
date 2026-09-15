@@ -29,3 +29,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+*.zip
+.expo/
+.expo-shared/

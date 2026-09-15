@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "KisanQ Farmer",
+    "slug": "kisanq-farmer",
+    "scheme": "kisanq",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "platforms": [
+      "android"
+    ],
+    "android": {
+      "package": "com.aveniq.kisanq",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "plugins": [
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow KisanQ to access your microphone for hands-free voice booking."
+        }
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "705ed7a7-8aff-4ec4-a23a-838435de51dc"
+      }
+    },
+    "owner": "bmahesh2027"
+  }
+}

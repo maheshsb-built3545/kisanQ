@@ -174,19 +174,30 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
     localStorage.removeItem('kq_token');
     localStorage.removeItem('kq_user');
+    localStorage.removeItem('kisanq_token');
+    localStorage.removeItem('kisanq_user');
     localStorage.removeItem('kisanq_farmer_profile');
+    localStorage.removeItem('kisanq_staff_session');
+    localStorage.removeItem('kisanq_active_mandi_id');
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
   }, []);
 
   /**
-   * Logout user and clear tokens
+   * Logout user and completely purge authentication tokens
    */
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
     setToken(null);
     setUser(null);
     localStorage.removeItem('kq_token');
     localStorage.removeItem('kq_user');
+    localStorage.removeItem('kisanq_token');
+    localStorage.removeItem('kisanq_user');
     localStorage.removeItem('kisanq_farmer_profile');
     localStorage.removeItem('kisanq_staff_session');
+    localStorage.removeItem('kisanq_active_mandi_id');
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
   }, []);
 
   const value = {

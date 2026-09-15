@@ -20,21 +20,22 @@ const PRE_DESK_1_STATUSES = new Set([
 
 const fastTrackService = {
   /**
-   * Helper: Calculate available discount tiers that satisfy the statutory MSP floor
+   * Helper: Calculate available flat-rate discount tiers (₹10, ₹20, ₹40/Qtl) that satisfy the statutory MSP floor
    */
   calculateTierAvailability: (marketPriceToday, mspPrice) => {
-    const tiers = [2, 5, 10];
-    const tierDetails = tiers.map((tier) => {
-      const discountedPrice = Math.round(marketPriceToday * (1 - tier / 100));
+    const tiers = [10, 20, 40];
+    const tierDetails = tiers.map((discountPerQtl) => {
+      const discountedPrice = marketPriceToday - discountPerQtl;
       const isValid = discountedPrice >= mspPrice;
       return {
-        tier,
-        discountPercent: tier,
+        tier: discountPerQtl,
+        discountPerQuintal: discountPerQtl,
+        discountAmount: discountPerQtl,
         discountedPrice,
         marketPrice: marketPriceToday,
         mspPrice,
         isValid,
-        discountAmount: marketPriceToday - discountedPrice
+        label: `₹${discountPerQtl}/Qtl Off`
       };
     });
 
@@ -55,8 +56,8 @@ const fastTrackService = {
     const cleanTokenNumber = (tokenNumber || '').trim().toUpperCase();
     const selectedTier = Number(tier);
 
-    if (![2, 5, 10].includes(selectedTier)) {
-      const err = new Error('Invalid tier. Fast-track discount tier must be 2, 5, or 10%.');
+    if (![10, 20, 40, 2, 5].includes(selectedTier)) {
+      const err = new Error('Invalid tier. Fast-track discount tier must be flat rate ₹10, ₹20, or ₹40/Qtl.');
       err.statusCode = 400;
       throw err;
     }
@@ -156,17 +157,21 @@ const fastTrackService = {
     const marketPriceToday = cropPriceRecord.marketPriceToday;
     const mspPrice = cropPriceRecord.mspPrice;
 
-    // 6. HARD FLOOR CHECK
-    const discountedPrice = Math.round(marketPriceToday * (1 - selectedTier / 100));
+    // 6. HARD STATUTORY FLOOR CHECK (MarketRate - FlatDiscount >= MSPFloor)
+    const flatDiscount = [10, 20, 40].includes(selectedTier)
+      ? selectedTier
+      : Math.round(marketPriceToday * (selectedTier / 100)); // backwards compatibility
+
+    const discountedPrice = marketPriceToday - flatDiscount;
     const tierCheck = fastTrackService.calculateTierAvailability(marketPriceToday, mspPrice);
 
     if (discountedPrice < mspPrice) {
       const validOptions = tierCheck.validTiers.length > 0
-        ? tierCheck.validTiers.map((t) => `${t}%`).join(', ')
+        ? tierCheck.validTiers.map((t) => `₹${t}/Qtl`).join(', ')
         : 'None (market rate is within statutory MSP margin)';
 
       const err = new Error(
-        `Statutory floor violation: Tier ${selectedTier}% discount yields ₹${discountedPrice}/Qtl, which is below the statutory MSP floor of ₹${mspPrice}/Qtl. Available valid tiers for ${crop} today: ${validOptions}.`
+        `Statutory floor violation: ₹${flatDiscount}/Qtl discount yields ₹${discountedPrice}/Qtl, which is below the statutory MSP floor of ₹${mspPrice}/Qtl. Available valid tiers for ${crop} today: ${validOptions}.`
       );
       err.statusCode = 400;
       err.code = 'FLOOR_PRICE_VIOLATION';
@@ -274,7 +279,7 @@ const fastTrackService = {
     }
 
     inMemoryFastTrackStore.set(savedRequest._id ? savedRequest._id.toString() : savedRequest.id, savedRequest);
-    logger.info(`[FastTrack] Created request for ${cleanTokenNumber} (Tier ${selectedTier}%, Slot ${assignedSlot}, Rate ₹${discountedPrice}/Qtl)`);
+    logger.info(`[FastTrack] Created request for ${cleanTokenNumber} (Tier ₹${selectedTier}/Qtl, Slot ${assignedSlot}, Rate ₹${discountedPrice}/Qtl)`);
 
     return {
       request: savedRequest,
@@ -415,7 +420,7 @@ const fastTrackService = {
       actorRole: officerUser.role,
       action: 'FAST_TRACK_APPROVED',
       targetId: request.tokenNumber,
-      reason: `Approved Fast-Track Priority tier ${request.tier}%: Discounted ₹${request.discountedPrice}/Qtl vs Market ₹${request.marketPriceAtRequest}/Qtl (MSP: ₹${request.mspPriceAtRequest}/Qtl)`
+      reason: `Approved Fast-Track Priority: Discounted ₹${request.discountedPrice}/Qtl (Flat -₹${request.tier}/Qtl) vs Market ₹${request.marketPriceAtRequest}/Qtl (MSP: ₹${request.mspPriceAtRequest}/Qtl)`
     });
 
     logger.info(`[FastTrack] APPROVED request ${requestId} for token ${request.tokenNumber} by ${officerIdentity}`);

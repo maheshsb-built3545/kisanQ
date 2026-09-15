@@ -15,31 +15,12 @@ export const RequireAuth = ({ children, redirectTo }) => {
     );
   }
 
-  // Auto-heal session in demo mode if localStorage has no token
+  // Guard Check: Cleanly redirect unauthenticated users to login/landing
   if (!isAuthenticated) {
     const isStaffRoute = location.pathname.startsWith('/staff') ||
       ['/guard-terminal', '/weighmaster-desk', '/supervisor-exceptions', '/admin-dashboard', '/admin'].includes(location.pathname);
 
-    const defaultRole = isStaffRoute ? 'district_admin' : 'farmer';
-    const defaultName = isStaffRoute ? 'District Collector Admin' : 'Mahesh Borde';
-
-    const demoUser = {
-      name: defaultName,
-      phone: '9876543210',
-      role: defaultRole,
-      centreId: '65f1a2b3c4d5e6f7a8b9c0d1'
-    };
-
-    try {
-      localStorage.setItem('kq_user', JSON.stringify(demoUser));
-      localStorage.setItem('kq_token', 'demo_auto_auth_token_2026');
-      window.location.reload();
-      return null;
-    } catch {
-      // Fallback
-    }
-
-    const targetRedirect = redirectTo || (isStaffRoute ? '/staff-login' : '/farmer-login');
+    const targetRedirect = redirectTo || (isStaffRoute ? '/staff-login' : '/');
     return <Navigate to={targetRedirect} state={{ from: location }} replace />;
   }
 

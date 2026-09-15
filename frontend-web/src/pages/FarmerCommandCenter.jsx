@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import GovHeader from '../components/common/GovHeader';
 import PickupLocationPicker from '../components/common/PickupLocationPicker';
+import VoiceBookingModal from '../components/farmer/VoiceBookingModal';
 import { pricesApi, fastTrackApi } from '../api';
 import {
 
@@ -39,7 +40,7 @@ import {
   calculateAllMandiDistances,
   DEFAULT_FARMER_COORDINATES
 } from '../services/routingService';
-import { TOKEN_STATUS, normalizeStatus, isTokenActive } from '../utils/statusEnums';
+import { TOKEN_STATUS, normalizeStatus, isTokenActive, formatQueueRange, formatVehiclesAheadRange } from '../utils/statusEnums';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const CROPS = ['Wheat', 'Soybean', 'Onion', 'Cotton'];
@@ -274,15 +275,54 @@ function BookingPanel({
 }) {
   const [crop, setCrop] = useState(mandi?.cropsHandled?.[0] || 'Wheat');
   const [quantity, setQuantity] = useState(10);
+  const [dateOffset, setDateOffset] = useState(0); // 0: Today, 1: Tomorrow
   const [slot, setSlot] = useState(SLOTS[0]);
   const [isBooking, setIsBooking] = useState(false);
   const [booked, setBooked] = useState(false);
   const [bookingError, setBookingError] = useState('');
   const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
+  const isSlotPassed = (slotObj, offset) => {
+    if (offset > 0) return false;
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const [endH, endM] = (slotObj.end || '17:00').split(':').map(Number);
+    const slotEndMinutes = endH * 60 + (endM || 0);
+    return currentMinutes >= (slotEndMinutes - 15);
+  };
+
+  const allTodaySlotsPassed = SLOTS.every((s) => isSlotPassed(s, 0));
+
+  const getFirstValidSlot = (offset) => {
+    const valid = SLOTS.find((s) => !isSlotPassed(s, offset));
+    return valid || SLOTS[0];
+  };
+
+  useEffect(() => {
+    if (dateOffset === 0 && allTodaySlotsPassed) {
+      setDateOffset(1);
+      setSlot(SLOTS[0]);
+    } else if (isSlotPassed(slot, dateOffset)) {
+      setSlot(getFirstValidSlot(dateOffset));
+    }
+  }, [dateOffset]);
+
+  const getFormattedDate = (offset) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offset);
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  const selectedDateStr = getFormattedDate(dateOffset);
+
   const handleBook = async (explicitCoords = null) => {
     if (hasActiveBooking) {
       setBookingError(`You already have an active booking (${activeToken?.id || activeToken?.tokenNumber}). Complete delivery before reserving a new slot.`);
+      return;
+    }
+
+    if (isSlotPassed(slot, dateOffset)) {
+      setBookingError('The selected arrival slot has already passed for today. Please select an available slot or book for tomorrow.');
       return;
     }
 
@@ -319,7 +359,7 @@ function BookingPanel({
       quantityBand,
       quantity,
       slotLabel: slot.label.trim(),
-      slotDate: today,
+      slotDate: selectedDateStr,
       latitude: effLat,
       longitude: effLng
     });
@@ -329,7 +369,7 @@ function BookingPanel({
       crop,
       status: 'BOOKED',
     });
-    token.queuePosition = queuePos + 7; // simulate some queue ahead
+    token.queuePosition = queuePos;
 
     try {
       const saved = await saveTokenAsync(token);
@@ -343,6 +383,10 @@ function BookingPanel({
           onRequestPickupLocation((newCoords) => handleBook(newCoords));
           return;
         }
+      }
+      if (err?.code === 'SLOT_EXPIRED' || err?.message?.includes('expired') || err?.message?.includes('passed')) {
+        setBookingError(err.message || 'The selected arrival slot has already passed for today. Please select an available slot or book for tomorrow.');
+        return;
       }
       if (err?.code === 'ACTIVE_TOKEN_EXISTS' || err?.message?.includes('active booking')) {
         setBookingError(err.message || 'You already have an active booking in progress.');
@@ -516,26 +560,92 @@ function BookingPanel({
             </div>
           </div>
 
+          {/* Arrival Date Selection */}
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-semibold text-slate-600">Arrival Date</label>
+              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                📅 {dateOffset === 0 ? 'Today' : 'Tomorrow'}, {selectedDateStr}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setDateOffset(0)}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all text-left flex items-center justify-between ${
+                  dateOffset === 0
+                    ? 'bg-emerald-50 border-emerald-400 text-emerald-900 ring-1 ring-emerald-400/30'
+                    : allTodaySlotsPassed
+                    ? 'bg-slate-50 border-slate-200 text-slate-400 opacity-60'
+                    : 'bg-white border-slate-200 text-slate-600 hover:border-emerald-200'
+                }`}
+              >
+                <div>
+                  <span className="block font-bold">Today</span>
+                  <span className="text-[10px] text-slate-400 font-normal">{getFormattedDate(0)}</span>
+                </div>
+                {allTodaySlotsPassed && (
+                  <span className="text-[9px] font-bold bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">Closed</span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDateOffset(1)}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all text-left flex items-center justify-between ${
+                  dateOffset === 1
+                    ? 'bg-emerald-50 border-emerald-400 text-emerald-900 ring-1 ring-emerald-400/30'
+                    : 'bg-white border-slate-200 text-slate-600 hover:border-emerald-200'
+                }`}
+              >
+                <div>
+                  <span className="block font-bold">Tomorrow</span>
+                  <span className="text-[10px] text-slate-400 font-normal">{getFormattedDate(1)}</span>
+                </div>
+                <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">Available</span>
+              </button>
+            </div>
+            {dateOffset === 0 && allTodaySlotsPassed && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-2">
+                ⚠️ Today's intake slots have ended. Please select Tomorrow to book an arrival window.
+              </p>
+            )}
+          </div>
+
           {/* Slot */}
           <div className="mb-5">
             <label className="block text-xs font-semibold text-slate-600 mb-2">Arrival Time Slot</label>
             <div className="space-y-2">
-              {SLOTS.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => setSlot(s)}
-                  className={`w-full text-left px-3 py-2.5 rounded-xl border text-xs font-medium transition-all flex items-center gap-2 ${
-                    slot.id === s.id
-                      ? 'bg-emerald-50 border-emerald-400 text-emerald-800 ring-1 ring-emerald-400/30'
-                      : 'bg-white border-slate-200 text-slate-600 hover:border-emerald-200'
-                  }`}
-                >
-                  <Clock className={`w-3.5 h-3.5 shrink-0 ${slot.id === s.id ? 'text-emerald-500' : 'text-slate-400'}`} />
-                  {s.label}
-                  {slot.id === s.id && <BadgeCheck className="w-3.5 h-3.5 text-emerald-500 ml-auto" />}
-                </button>
-              ))}
+              {SLOTS.map((s) => {
+                const isPassed = isSlotPassed(s, dateOffset);
+                const isSelected = slot.id === s.id && !isPassed;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    disabled={isPassed}
+                    onClick={() => !isPassed && setSlot(s)}
+                    className={`w-full text-left px-3 py-2.5 rounded-xl border text-xs font-medium transition-all flex items-center justify-between gap-2 ${
+                      isPassed
+                        ? 'bg-slate-50 border-slate-200 text-slate-400 opacity-60 cursor-not-allowed'
+                        : isSelected
+                        ? 'bg-emerald-50 border-emerald-400 text-emerald-800 ring-1 ring-emerald-400/30'
+                        : 'bg-white border-slate-200 text-slate-600 hover:border-emerald-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Clock className={`w-3.5 h-3.5 shrink-0 ${isPassed ? 'text-slate-300' : isSelected ? 'text-emerald-500' : 'text-slate-400'}`} />
+                      <span className={isPassed ? 'line-through text-slate-400' : ''}>{s.label}</span>
+                    </div>
+                    {isPassed ? (
+                      <span className="text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">
+                        Slot passed
+                      </span>
+                    ) : isSelected ? (
+                      <BadgeCheck className="w-3.5 h-3.5 text-emerald-500 ml-auto" />
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -901,7 +1011,7 @@ function TokenCard({ token, onOpenTerminal, onOpenCancelModal, onRequestGateExit
   const crop = token?.crop || 'Wheat';
   const quantityBand = token?.quantityBand || `${token?.quantity || 10} Quintals`;
   const slotDate = token?.slotDate || 'Today';
-  const queuePos = token?.queuePosition || 8;
+  const queuePos = token?.queuePosition || 1;
 
   // Load Fast-Track status & floor checks
   const loadFastTrackStatus = useCallback(async () => {
@@ -1107,34 +1217,64 @@ function TokenCard({ token, onOpenTerminal, onOpenCancelModal, onRequestGateExit
         </div>
       )}
 
-      {/* Stage Progress Mini */}
+      {/* ─── 5-Stage Operational Checkpoint Stepper ─── */}
       {!isCancelled && (
-        <div className="mb-4">
-          <div className="flex justify-between text-[10px] text-slate-400 mb-1">
-            <span>Checkpoint Progress</span>
-            <span className="font-bold text-slate-600">{completedStages}/5 stages</span>
+        <div className="mb-4 bg-slate-50/80 rounded-2xl p-3.5 border border-slate-200">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="text-xs font-bold text-slate-800">Operational Checkpoint Pipeline</span>
+            </div>
+            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full">
+              {completedStages}/5 Cleared
+            </span>
           </div>
-          <div className="flex gap-1">
-            {stages.map((s, i) => {
-              const st = (s?.status || '').toLowerCase();
+
+          <div className="grid grid-cols-5 gap-1.5">
+            {[
+              { id: 'SECURITY_GATE', label: 'Gate-In', desk: 'Desk 1', icon: ShieldCheck },
+              { id: 'QUALITY_GRADING', label: 'Quality', desk: 'Desk 2', icon: Leaf },
+              { id: 'WEIGHBRIDGE', label: 'Weigh', desk: 'Desk 3', icon: Scale },
+              { id: 'UNLOADING', label: 'Unload', desk: 'Desk 4', icon: Package },
+              { id: 'PAYMENT_SETTLEMENT', label: 'Payout', desk: 'Desk 5', icon: Banknote },
+            ].map((stageDef, idx) => {
+              const stageData = stages.find((s) => s?.id === stageDef.id) || stages[idx];
+              const st = (stageData?.status || '').toLowerCase();
+              const isDone = st === 'completed';
+              const isCurrent = st === 'in_progress' || st === 'in progress' || (idx === completedStages && !isDone && normStatus !== 'Cancelled' && normStatus !== 'Completed');
+              const IconComp = stageDef.icon;
+
               return (
                 <div
-                  key={s?.id || i}
-                  className={`flex-1 h-2 rounded-full transition-all ${
-                    st === 'completed'
-                      ? 'bg-emerald-500'
-                      : st === 'in_progress' || st === 'in progress'
-                      ? 'bg-amber-400 animate-pulse'
-                      : 'bg-slate-100'
+                  key={stageDef.id}
+                  className={`p-2 rounded-xl border text-center flex flex-col items-center justify-between transition-all ${
+                    isDone
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-900 shadow-2xs'
+                      : isCurrent
+                      ? 'bg-amber-50 border-amber-400 text-amber-900 ring-2 ring-amber-400/20 shadow-xs'
+                      : 'bg-white border-slate-200 text-slate-400 opacity-70'
                   }`}
-                />
+                >
+                  <div className={`w-6 h-6 rounded-lg flex items-center justify-center mb-1 ${
+                    isDone ? 'bg-emerald-600 text-white' : isCurrent ? 'bg-amber-500 text-white animate-pulse' : 'bg-slate-100 text-slate-400'
+                  }`}>
+                    {isDone ? <CheckCircle2 className="w-3.5 h-3.5" /> : <IconComp className="w-3.5 h-3.5" />}
+                  </div>
+                  <p className="text-[10px] font-extrabold truncate w-full leading-tight">{stageDef.label}</p>
+                  <span className="text-[9px] font-mono text-slate-400 mt-0.5">{stageDef.desk}</span>
+                </div>
               );
             })}
           </div>
-          <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-500">
-            <span>Queue Position: <strong className="text-emerald-600">#{queuePos}</strong></span>
-            <span>·</span>
-            <span>ETA: ~{queuePos * 12} mins</span>
+
+          <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-200/60 text-[10px] text-slate-600">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>Queue Position: <strong className="text-emerald-700 font-bold">{formatQueueRange(queuePos)}</strong></span>
+            </div>
+            {queuePos > 1 && (
+              <span className="text-slate-500 font-medium">Estimated Arrival ETA: ~{Math.max(5, (queuePos - 1) * 8)} mins</span>
+            )}
           </div>
         </div>
       )}
@@ -1157,7 +1297,7 @@ function TokenCard({ token, onOpenTerminal, onOpenCancelModal, onRequestGateExit
                   <span>Fast-Track Priority: Pending Approval</span>
                 </div>
                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-900 font-mono">
-                  Tier {fastTrackData.activeRequest.tier}%
+                  ₹{fastTrackData.activeRequest.tier}/Qtl Off
                 </span>
               </div>
               <div className="flex items-center justify-between text-[11px] text-slate-700 bg-white/90 p-2 rounded-lg border border-amber-200/70">
@@ -1204,10 +1344,17 @@ function TokenCard({ token, onOpenTerminal, onOpenCancelModal, onRequestGateExit
             <button
               type="button"
               onClick={() => setShowFastTrackModal(true)}
-              className="w-full py-2 px-3 rounded-xl border border-dashed border-amber-300 bg-amber-50/60 hover:bg-amber-100/70 text-amber-900 text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 via-emerald-600 to-teal-700 hover:from-amber-600 hover:to-teal-800 text-white text-xs font-bold flex items-center justify-between shadow-md shadow-emerald-900/10 hover:shadow-lg transition-all cursor-pointer group"
             >
-              <Zap className="w-3.5 h-3.5 text-amber-600" />
-              <span>⚡ Request Fast-Track Priority Intake</span>
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded-lg bg-white/20 flex items-center justify-center">
+                  <Zap className="w-3.5 h-3.5 text-amber-200 fill-amber-200" />
+                </div>
+                <span className="tracking-wide">Request Fast-Track Priority Intake</span>
+              </div>
+              <span className="text-[10px] font-black uppercase bg-white/20 text-white px-2 py-0.5 rounded-full tracking-wider group-hover:bg-white/30 transition-colors">
+                Priority #1 →
+              </span>
             </button>
           )}
         </div>
@@ -1237,7 +1384,7 @@ function TokenCard({ token, onOpenTerminal, onOpenCancelModal, onRequestGateExit
             </div>
 
             <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-              Voluntarily offer a small discount from today's market rate in exchange for priority gate queue placement (Queue Position #1). Discounted rates are strictly protected by the statutory MSP floor.
+              Voluntarily offer a small flat discount from today's market rate in exchange for priority gate queue placement (Queue Position #1). Discounted rates are strictly protected by the statutory MSP floor.
             </p>
 
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 mb-4 text-xs space-y-1">
@@ -1247,7 +1394,7 @@ function TokenCard({ token, onOpenTerminal, onOpenCancelModal, onRequestGateExit
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Today Market Rate:</span>
-                <span className="font-bold text-slate-800 font-mono">₹{fastTrackData?.tierAvailability?.marketPriceToday?.toLocaleString('en-IN') || '4,950'}/Qtl</span>
+                <span className="font-bold text-slate-800 font-mono">₹{fastTrackData?.tierAvailability?.marketPriceToday?.toLocaleString('en-IN') || '4,940'}/Qtl</span>
               </div>
               <div className="flex justify-between text-emerald-700 font-bold">
                 <span>Statutory MSP Floor:</span>
@@ -1258,11 +1405,13 @@ function TokenCard({ token, onOpenTerminal, onOpenCancelModal, onRequestGateExit
             <div className="space-y-2.5 mb-5">
               <label className="text-xs font-bold text-slate-700 block">Select Priority Discount Tier:</label>
               {(fastTrackData?.tierAvailability?.tierDetails || [
-                { tier: 2, discountedPrice: 4851, isValid: false },
-                { tier: 5, discountedPrice: 4703, isValid: false },
-                { tier: 10, discountedPrice: 4455, isValid: false }
-              ]).map((td) => {
+                { tier: 10, discountPerQuintal: 10, discountedPrice: 4930, isValid: true, label: 'Tier 1: ₹10/Qtl Off' },
+                { tier: 20, discountPerQuintal: 20, discountedPrice: 4920, isValid: true, label: 'Tier 2: ₹20/Qtl Off' },
+                { tier: 40, discountPerQuintal: 40, discountedPrice: 4900, isValid: false, label: 'Tier 3: ₹40/Qtl Off' }
+              ]).map((td, idx) => {
                 const isSelected = selectedFastTrackTier === td.tier;
+                const tierNumber = idx + 1;
+                const tierLabel = td.label || `Tier ${tierNumber}: ₹${td.tier}/Qtl Off`;
                 return (
                   <div
                     key={td.tier}
@@ -1282,7 +1431,7 @@ function TokenCard({ token, onOpenTerminal, onOpenCancelModal, onRequestGateExit
                   >
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900">Tier {td.tier}% Discount</span>
+                        <span className="font-bold text-slate-900">{tierLabel}</span>
                         {!td.isValid && (
                           <span className="text-[9px] px-1.5 py-0.2 rounded bg-rose-100 text-rose-700 font-bold">
                             Below Statutory MSP
@@ -1500,7 +1649,7 @@ function QueueTerminalModal({
   };
 
   const tokenNumber = localToken?.tokenNumber || localToken?.id || 'KQ-TOKEN';
-  const queuePos = localToken?.queuePosition || 8;
+  const queuePos = localToken?.queuePosition || 1;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-y-auto">
@@ -1530,8 +1679,10 @@ function QueueTerminalModal({
           <div className="grid grid-cols-3 gap-3 mt-4">
             <div className="bg-white/10 rounded-xl p-3">
               <p className="text-[10px] text-slate-400 font-medium uppercase">Queue Position</p>
-              <p className="text-sm font-black text-white mt-0.5">#{queuePos} in Line</p>
-              <p className="text-[10px] text-emerald-400 mt-0.5">~{queuePos * 12}m to turn</p>
+              <p className="text-sm font-black text-white mt-0.5">{formatQueueRange(queuePos)}</p>
+              <p className="text-[10px] text-emerald-400 mt-0.5">
+                {queuePos <= 1 ? 'Approaching Gate' : `~${Math.max(5, (queuePos - 1) * 8)}m to turn`}
+              </p>
             </div>
             <div className="bg-white/10 rounded-xl p-3">
               <p className="text-[10px] text-slate-400 font-medium uppercase">Travel Duration</p>
@@ -1545,7 +1696,7 @@ function QueueTerminalModal({
             <div className="bg-white/10 rounded-xl p-3">
               <p className="text-[10px] text-slate-400 font-medium uppercase">Leave Home By</p>
               <p className="text-sm font-black text-emerald-400 mt-0.5">
-                {routingData?.leaveBy?.leaveTimeFormatted || '08:35 AM'}
+                {routingData?.leaveBy?.leaveTimeFormatted || new Date(Date.now() + 25 * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
               </p>
               <span className="text-[10px] text-amber-300 font-semibold">15m Buffer</span>
             </div>
@@ -1720,342 +1871,22 @@ function QueueTerminalModal({
   );
 }
 
-/**
- * ─── Simulated Trilingual Voice Booking Modal (Demo Mode) ────────────────────
- * Features animated audio waveform & pulsing mic with cycling captions:
- * English ("Listening...") -> Hindi ("सुन रहे हैं...") -> Marathi ("ऐकत आहे...")
- * Transitions to Token Generated confirmation preview for one-tap booking.
- */
-function VoiceBookingModal({
-  isOpen,
-  onClose,
-  onConfirmBooking,
-  defaultMandi,
-  farmerName,
-  farmerPhone,
-  farmerCoords,
-  pickupLocation,
-  onRequestPickupLocation,
-  hasActiveBooking,
-  activeToken
-}) {
-  const [phase, setPhase] = useState('LISTENING'); // 'LISTENING' | 'PREVIEW'
-  const [langIndex, setLangIndex] = useState(0);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [mockTokenId, setMockTokenId] = useState('');
-
-  const targetMandi = defaultMandi || MANDIS[0];
-  const targetCrop = targetMandi.cropsHandled?.[0] || 'Wheat';
-  const targetSlot = SLOTS[0];
-  const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-  const estimatedRate = targetMandi.rates?.today?.[targetCrop] || 2460;
-  const estimatedAmount = 20 * estimatedRate;
-
-  const LANGUAGES = [
-    {
-      code: 'en',
-      langName: 'English',
-      caption: 'Listening...',
-      utterance: '“APMC Kopargaon, 20 Quintals Wheat, Morning slot”'
-    },
-    {
-      code: 'hi',
-      langName: 'हिन्दी',
-      caption: 'सुन रहे हैं...',
-      utterance: '“कोपरगांव मंडी, 20 क्विंटल गेहूं, सुबह का स्लॉट”'
-    },
-    {
-      code: 'mr',
-      langName: 'मराठी',
-      caption: 'ऐकत आहे...',
-      utterance: '“कोपरगाव मंडी, 20 क्विंटल गहू, सकाळचा स्लॉट”'
-    }
-  ];
-
-  // Language cycling & auto-transition to preview
-  useEffect(() => {
-    if (!isOpen) {
-      setPhase('LISTENING');
-      setLangIndex(0);
-      setIsSubmitting(false);
-      setErrorMsg('');
-      setMockTokenId('');
-      return;
-    }
-
-    setPhase('LISTENING');
-    setLangIndex(0);
-    setErrorMsg('');
-    const newId = generateTokenId(targetMandi.code?.split('-')?.[1] || 'KPG');
-    setMockTokenId(newId);
-
-    // Cycle languages every 1.5s (0s: English -> 1.5s: Hindi -> 3.0s: Marathi)
-    const interval = setInterval(() => {
-      setLangIndex((prev) => {
-        if (prev < LANGUAGES.length - 1) return prev + 1;
-        return prev;
-      });
-    }, 1500);
-
-    // Transition to preview after ~4.5 seconds total
-    const timer = setTimeout(() => {
-      setPhase('PREVIEW');
-    }, 4500);
-
-    return () => {
-      clearInterval(interval);
-      clearTimeout(timer);
-    };
-  }, [isOpen, targetMandi]);
-
-  if (!isOpen) return null;
-
-  const currentLang = LANGUAGES[langIndex] || LANGUAGES[0];
-
-  const handleConfirm = async () => {
-    if (hasActiveBooking) {
-      setErrorMsg(`You already have an active booking (${activeToken?.id || activeToken?.tokenNumber}). Complete delivery before reserving a new slot.`);
-      return;
-    }
-
-    const hasPin = Boolean(
-      pickupLocation?.coordinates &&
-      Array.isArray(pickupLocation.coordinates) &&
-      pickupLocation.coordinates.length === 2 &&
-      !isNaN(pickupLocation.coordinates[0]) &&
-      !isNaN(pickupLocation.coordinates[1])
-    );
-
-    // If farmer does not have pickup location set, open interactive map modal first
-    if (!hasPin) {
-      if (onRequestPickupLocation) {
-        onClose();
-        onRequestPickupLocation((newCoords) => {
-          onConfirmBooking({
-            id: mockTokenId,
-            mandi: targetMandi,
-            crop: targetCrop,
-            quantity: 20,
-            slot: targetSlot,
-            coords: newCoords
-          });
-        });
-        return;
-      }
-    }
-
-    setIsSubmitting(true);
-    setErrorMsg('');
-    try {
-      await onConfirmBooking({
-        id: mockTokenId,
-        mandi: targetMandi,
-        crop: targetCrop,
-        quantity: 20,
-        slot: targetSlot,
-        coords: farmerCoords
-      });
-      onClose();
-    } catch (err) {
-      setIsSubmitting(false);
-      setErrorMsg(err.message || 'Booking could not be created.');
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden text-white animate-scaleIn relative">
-        
-        {/* Top Gradient Ribbon */}
-        <div className="h-1.5 w-full bg-gradient-to-r from-emerald-500 via-teal-400 to-amber-400" />
-
-        {/* Header Bar */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center text-emerald-400">
-              <Mic className="w-4 h-4 animate-pulse" />
-            </div>
-            <div>
-              <h3 className="font-bold text-sm text-white">Voice Booking Assistant</h3>
-              <p className="text-[10px] text-emerald-400 font-medium tracking-wide uppercase">AI Speech-to-Slot Engine</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Body Content */}
-        <div className="p-6 sm:p-8">
-          {phase === 'LISTENING' ? (
-            <div className="text-center space-y-6">
-              {/* Language Pills Indicator */}
-              <div className="inline-flex items-center gap-1.5 bg-slate-800/80 border border-slate-700/80 rounded-full px-3 py-1">
-                {LANGUAGES.map((l, idx) => (
-                  <span
-                    key={l.code}
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full transition-all ${
-                      idx === langIndex
-                        ? 'bg-emerald-500 text-slate-950 shadow-xs'
-                        : 'text-slate-400 opacity-60'
-                    }`}
-                  >
-                    {l.langName}
-                  </span>
-                ))}
-              </div>
-
-              {/* Glowing Pulsing Mic Orb with Ripple Rings */}
-              <div className="relative w-28 h-28 mx-auto flex items-center justify-center my-2">
-                <div className="absolute inset-0 rounded-full border-2 border-emerald-400/30 animate-ping opacity-75" />
-                <div className="absolute -inset-2 rounded-full border border-teal-400/20 animate-pulse" />
-                <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-emerald-600 via-teal-500 to-emerald-400 flex items-center justify-center shadow-xl shadow-emerald-500/30">
-                  <Mic className="w-10 h-10 text-slate-950 animate-pulse" />
-                </div>
-              </div>
-
-              {/* Dynamic Animated Waveform */}
-              <div className="flex items-center justify-center gap-1.5 h-10 py-1">
-                {[40, 75, 100, 60, 90, 100, 70, 85, 45].map((h, i) => (
-                  <span
-                    key={i}
-                    className="w-1 bg-gradient-to-t from-emerald-500 to-teal-300 rounded-full animate-pulse"
-                    style={{
-                      height: `${h}%`,
-                      animationDuration: `${0.6 + (i % 3) * 0.25}s`,
-                      animationDelay: `${i * 0.08}s`
-                    }}
-                  />
-                ))}
-              </div>
-
-              {/* Cycling Trilingual Caption */}
-              <div className="space-y-1.5 min-h-[64px]">
-                <h4 className="text-2xl font-black text-white tracking-tight animate-fadeIn">
-                  {currentLang.caption}
-                </h4>
-                <p className="text-xs text-emerald-300 font-medium italic opacity-90 animate-fadeIn">
-                  {currentLang.utterance}
-                </p>
-              </div>
-
-              {/* Disclaimer */}
-              <div className="pt-2">
-                <span className="inline-block text-[11px] font-semibold text-slate-400 bg-slate-800/60 border border-slate-700/60 px-3 py-1 rounded-full">
-                  Voice booking demo — tap to simulate
-                </span>
-              </div>
-            </div>
-          ) : (
-            /* PREVIEW PHASE: Token Generated Confirmation State */
-            <div className="space-y-5 animate-scaleIn">
-              {/* Success Badge */}
-              <div className="flex items-center justify-between bg-emerald-950/60 border border-emerald-500/30 rounded-2xl p-3.5">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-500 flex items-center justify-center text-slate-950 font-black">
-                    ✓
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-black uppercase tracking-wider text-emerald-400">
-                      Voice Intake Recognized
-                    </h4>
-                    <p className="text-[11px] text-slate-300">Ready for instant slot confirmation</p>
-                  </div>
-                </div>
-                <span className="text-[10px] font-mono font-bold bg-emerald-900/80 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded">
-                  {mockTokenId}
-                </span>
-              </div>
-
-              {/* Token Details Grid */}
-              <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-700/60 pb-2.5 text-xs">
-                  <span className="text-slate-400 flex items-center gap-1.5">
-                    <Building2 className="w-3.5 h-3.5 text-emerald-400" /> Mandi Centre:
-                  </span>
-                  <span className="font-bold text-white">{targetMandi.name}</span>
-                </div>
-                <div className="flex items-center justify-between border-b border-slate-700/60 pb-2.5 text-xs">
-                  <span className="text-slate-400 flex items-center gap-1.5">
-                    <Leaf className="w-3.5 h-3.5 text-emerald-400" /> Commodity / Crop:
-                  </span>
-                  <span className="font-bold text-white">{targetCrop} (20 Quintals)</span>
-                </div>
-                <div className="flex items-center justify-between border-b border-slate-700/60 pb-2.5 text-xs">
-                  <span className="text-slate-400 flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-emerald-400" /> Arrival Slot:
-                  </span>
-                  <span className="font-bold text-emerald-300">{targetSlot.label.trim()}</span>
-                </div>
-                <div className="flex items-center justify-between text-xs pt-0.5">
-                  <span className="text-slate-400 flex items-center gap-1.5">
-                    <Banknote className="w-3.5 h-3.5 text-emerald-400" /> Est. Market Value:
-                  </span>
-                  <span className="font-black text-white text-sm text-emerald-400">
-                    ₹{estimatedAmount.toLocaleString('en-IN')} <span className="text-[10px] text-slate-400 font-normal">(@ ₹{estimatedRate}/Qtl)</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* Error Message if any */}
-              {errorMsg && (
-                <div className="p-3 bg-rose-950/70 border border-rose-500/50 rounded-xl text-xs text-rose-300 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <span>{errorMsg}</span>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="flex gap-3 pt-1">
-                <button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={onClose}
-                  className="flex-1 py-3 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold transition-all"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={handleConfirm}
-                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs transition-all shadow-lg shadow-emerald-900/40 flex items-center justify-center gap-1.5 disabled:opacity-60"
-                >
-                  {isSubmitting ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /> Generating Token…</>
-                  ) : (
-                    <><Ticket className="w-4 h-4" /> Confirm & Book Slot</>
-                  )}
-                </button>
-              </div>
-
-              {/* Disclaimer Tag */}
-              <p className="text-[10px] text-center text-slate-500 font-medium">
-                Voice booking demo — tap to simulate · Reuses standard APMC queue reservation
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Main Farmer Command Center ───────────────────────────────────────────────
 export default function FarmerCommandCenter() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
+  const handleLogout = async () => {
+    await logout();
+    console.log(localStorage.getItem('kisanq_token'));
+    navigate('/', { replace: true });
+  };
+
   const farmerName = user?.name || 'Mahesh Borde';
   const farmerPhone = user?.phone || '9876543210';
 
   const [activeTab, setActiveTab] = useState('DISCOVERY');
-  const [selectedMandi, setSelectedMandi] = useState(null);
+  const [selectedMandi, setSelectedMandi] = useState(() => MANDIS[0] || null);
   const [tokens, setTokens] = useState(() => getFarmerTokens(farmerPhone));
   const [terminalToken, setTerminalToken] = useState(null);
   const [dbStatus, setDbStatus] = useState({ online: false, database: 'disconnected', cluster: '' });
@@ -2443,35 +2274,43 @@ export default function FarmerCommandCenter() {
     setActiveTab('TOKENS');
   };
 
-  const handleConfirmVoiceBooking = async ({ id, mandi, crop, quantity, slot, coords }) => {
+  const handleConfirmVoiceBooking = async (bookingDataOrToken) => {
+    // If a full token was already generated & persisted by the backend voice engine:
+    if (bookingDataOrToken && (bookingDataOrToken.tokenNumber || (bookingDataOrToken.id && bookingDataOrToken.stages))) {
+      const token = bookingDataOrToken;
+      handleBooked(token);
+      return token;
+    }
+
+    const { id, mandi, crop, quantity, slot, coords } = bookingDataOrToken || {};
     const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-    const quantityBand = `${quantity} Quintals`;
+    const quantityBand = `${quantity || 20} Quintals`;
     const effLat = coords?.lat || (user?.pickupLocation?.coordinates ? user?.pickupLocation?.coordinates?.[1] : 19.8928);
     const effLng = coords?.lng || (user?.pickupLocation?.coordinates ? user?.pickupLocation?.coordinates?.[0] : 74.4820);
 
     const token = buildNewToken({
       id,
-      mandiId: mandi.id,
-      mandiName: mandi.name,
-      mandiCode: mandi.code.split('-')[1] || 'KPG',
+      mandiId: mandi?.id || 'KPG-01',
+      mandiName: mandi?.name || 'APMC Kopargaon',
+      mandiCode: mandi?.code?.split('-')?.[1] || 'KPG',
       farmerName,
       phone: farmerPhone,
-      crop,
+      crop: crop || 'Soybean',
       quantityBand,
-      quantity,
-      slotLabel: slot.label.trim(),
+      quantity: quantity || 20,
+      slotLabel: (slot?.label || '08:00 – 11:00 AM').trim(),
       slotDate: today,
       latitude: effLat,
       longitude: effLng
     });
 
-    const queuePos = addTokenToPipeline(mandi.id, {
+    const queuePos = addTokenToPipeline(mandi?.id || 'KPG-01', {
       tokenId: token.id,
       farmerName,
-      crop,
+      crop: token.crop,
       status: 'BOOKED',
     });
-    token.queuePosition = queuePos + 7;
+    token.queuePosition = queuePos;
 
     const saved = await saveTokenAsync(token);
     handleBooked(saved || token);
@@ -2605,6 +2444,7 @@ export default function FarmerCommandCenter() {
         activeMandi={null}
         onMandiChange={null}
         onOpenResetModal={null}
+        onLogout={handleLogout}
       />
 
       {/* ── Modern Farmer Command Sub-Bar ─────────────────────────────────── */}
@@ -2652,7 +2492,7 @@ export default function FarmerCommandCenter() {
                     ? 'bg-slate-100 text-slate-400 border-slate-200 hover:bg-slate-200/80 cursor-pointer'
                     : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white border-emerald-500 shadow-emerald-200/50 hover:shadow-md'
                 }`}
-                title={hasActiveBooking ? `Active booking in progress (${activeToken?.tokenNumber || activeToken?.id})` : 'Voice Booking (Demo Mode)'}
+                title={hasActiveBooking ? `Active booking in progress (${activeToken?.tokenNumber || activeToken?.id})` : 'Smart Voice Booking (AI Assistant)'}
               >
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-300 opacity-75"></span>
@@ -2661,7 +2501,7 @@ export default function FarmerCommandCenter() {
                 <Mic className="w-3.5 h-3.5" />
                 <span>Voice Booking</span>
                 <span className="text-[9px] font-black uppercase bg-white/20 text-white px-1.5 py-0.5 rounded tracking-wider">
-                  DEMO
+                  AI VOICE
                 </span>
               </button>
             </div>
@@ -2746,8 +2586,8 @@ export default function FarmerCommandCenter() {
 
               <button
                 type="button"
-                onClick={logout}
-                className="p-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition-colors"
+                onClick={handleLogout}
+                className="p-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition-colors cursor-pointer"
                 title="Logout"
               >
                 <LogOut className="w-4 h-4" />
@@ -2847,7 +2687,7 @@ export default function FarmerCommandCenter() {
                 }`}
               >
                 <Mic className="w-4 h-4 text-emerald-600 animate-pulse" />
-                <span>Try Voice Booking (Demo)</span>
+                <span>Smart Voice Booking (AI)</span>
               </button>
             </div>
 
@@ -2947,7 +2787,7 @@ export default function FarmerCommandCenter() {
                       ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
                       : 'bg-emerald-50 hover:bg-emerald-100 border-emerald-300 text-emerald-800'
                   }`}
-                  title={hasActiveBooking ? 'Active booking already in progress' : 'Simulate Voice Booking'}
+                  title={hasActiveBooking ? 'Active booking already in progress' : 'Smart Voice Booking'}
                 >
                   <Mic className="w-3.5 h-3.5 text-emerald-600" />
                   <span>Voice Booking</span>
@@ -2992,21 +2832,81 @@ export default function FarmerCommandCenter() {
                 ))}
               </div>
             ) : tokens.length === 0 ? (
-              /* Empty state illustration */
-              <div className="bg-white rounded-2xl border border-slate-200 py-20 px-4 text-center max-w-lg mx-auto shadow-sm">
-                <div className="w-20 h-20 rounded-3xl bg-emerald-50 text-emerald-500 border border-emerald-100 flex items-center justify-center mx-auto mb-4">
-                  <Ticket className="w-10 h-10" />
+              /* Enhanced Empty state with 5-Desk Checkpoint Workflow */
+              <div className="space-y-6 max-w-4xl mx-auto">
+                {/* Hero Callout */}
+                <div className="bg-gradient-to-r from-emerald-900 via-slate-900 to-slate-900 text-white rounded-3xl p-6 sm:p-8 border border-emerald-500/30 shadow-xl relative overflow-hidden">
+                  <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+                    <div>
+                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold border border-emerald-400/30 mb-3">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Zero-Wait Mandi Logistics</span>
+                      </div>
+                      <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white">
+                        No Active Bookings — Reserve Your Arrival Slot
+                      </h2>
+                      <p className="text-xs sm:text-sm text-slate-300 mt-1.5 max-w-xl leading-relaxed">
+                        Book in advance to secure priority weighbridge clearance, real-time "Leave-By" GPS timing, and automated statutory MSP floor protection.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-3 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('DISCOVERY')}
+                        className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-500/25"
+                      >
+                        <Ticket className="w-4 h-4" /> Book Slot Now
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowVoiceModal(true)}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-3 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold border border-white/20 transition-all"
+                      >
+                        <Mic className="w-4 h-4 text-emerald-400" /> 🎙️ Voice Booking
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <h3 className="text-lg font-black text-slate-900 mb-1">No Active Mandi Bookings</h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto mb-6 leading-relaxed">
-                  You have no active mandi bookings. Discover a nearby APMC to book a slot.
-                </p>
-                <button
-                  onClick={() => setActiveTab('DISCOVERY')}
-                  className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-500 text-white rounded-xl text-sm font-bold hover:bg-emerald-600 transition-all shadow-md shadow-emerald-200"
-                >
-                  <MapPin className="w-4 h-4" /> Discover Nearby APMCs
-                </button>
+
+                {/* 5-Desk Checkpoint Workflow Guide */}
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-xs">
+                  <div className="flex items-center justify-between mb-5 pb-3 border-b border-slate-100">
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900">How the KisanQ 5-Desk Yard Checkpoint Works</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">Your vehicle moves through 5 digital checkpoints from gate arrival to direct DBT bank payment:</p>
+                    </div>
+                    <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full font-bold border border-emerald-200">
+                      5-Minute Target Cycle
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+                    {[
+                      { desk: 'Desk 1', title: 'Gate-In & ANPR', desc: 'Scan QR pass at north boom barrier for instant yard intake verification.', icon: ShieldCheck, color: 'text-blue-600 bg-blue-50 border-blue-200' },
+                      { desk: 'Desk 2', title: 'Quality Lab', desc: 'NIR moisture & foreign matter assaying with automated FAQ grading.', icon: Leaf, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+                      { desk: 'Desk 3', title: 'Pitless Scale', desc: 'Live gross weighbridge capture with digital zero-tamper slip generation.', icon: Scale, color: 'text-purple-600 bg-purple-50 border-purple-200' },
+                      { desk: 'Desk 4', title: 'Unloading Yard', desc: 'Produce transfer to official APMC storage bays & tare weight deduction.', icon: Package, color: 'text-amber-600 bg-amber-50 border-amber-200' },
+                      { desk: 'Desk 5', title: 'DBT Settlement', desc: 'Immediate statutory MSP payout settlement directly to farmer bank account.', icon: Banknote, color: 'text-emerald-700 bg-emerald-50 border-emerald-300' }
+                    ].map((step, idx) => {
+                      const IconComp = step.icon;
+                      return (
+                        <div key={idx} className="p-3.5 rounded-2xl bg-slate-50/70 border border-slate-200 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[10px] font-black uppercase text-slate-400 font-mono">{step.desk}</span>
+                              <div className={`w-6 h-6 rounded-lg flex items-center justify-center border ${step.color}`}>
+                                <IconComp className="w-3.5 h-3.5" />
+                              </div>
+                            </div>
+                            <h4 className="text-xs font-bold text-slate-900 mb-1 leading-snug">{step.title}</h4>
+                            <p className="text-[11px] text-slate-500 leading-relaxed">{step.desc}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             ) : (
               /* Token Cards Grid */
@@ -3072,7 +2972,7 @@ export default function FarmerCommandCenter() {
         />
       )}
 
-      {/* ── Simulated Voice Booking Modal (Demo Mode) ────────────────────────── */}
+      {/* ── Conversational Voice Booking Modal (Gemini AI) ────────────────── */}
       {showVoiceModal && (
         <VoiceBookingModal
           isOpen={showVoiceModal}
