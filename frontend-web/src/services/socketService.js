@@ -219,12 +219,25 @@ export function onQueueSlotFreed(callback) {
 }
 
 /**
- * Listen for real-time FAST_TRACK_REQUESTED events
+ * Listen for real-time FAST_TRACK_NEW_REQUEST events
+ */
+export function onFastTrackNewRequest(callback) {
+  const s = getSocket();
+  s.on('FAST_TRACK_NEW_REQUEST', callback);
+  return () => s.off('FAST_TRACK_NEW_REQUEST', callback);
+}
+
+/**
+ * Listen for real-time FAST_TRACK_REQUESTED / FAST_TRACK_NEW_REQUEST events
  */
 export function onFastTrackRequested(callback) {
   const s = getSocket();
+  s.on('FAST_TRACK_NEW_REQUEST', callback);
   s.on('FAST_TRACK_REQUESTED', callback);
-  return () => s.off('FAST_TRACK_REQUESTED', callback);
+  return () => {
+    s.off('FAST_TRACK_NEW_REQUEST', callback);
+    s.off('FAST_TRACK_REQUESTED', callback);
+  };
 }
 
 /**

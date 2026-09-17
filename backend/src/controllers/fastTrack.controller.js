@@ -18,16 +18,18 @@ const fastTrackController = {
       const { tier, phone } = req.body;
       const farmerPhone = phone || req.user?.phone;
 
+      const io = req.io || req.app?.get('io') || req.app?.io;
+
       const result = await fastTrackService.createRequest({
         tokenNumber,
         tier,
         farmerPhone,
-        user: req.user
+        user: req.user,
+        io
       });
 
-      // Broadcast event via WebSocket
-      const io = req.io || req.app.get('io');
-      if (io) {
+      // Broadcast event via WebSocket to Mandi room
+      if (io && result?.request) {
         broadcastFastTrackRequested(io, result.request.mandiId, result.request);
       }
 

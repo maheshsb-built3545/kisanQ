@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import GovHeader from '../components/common/GovHeader';
 import PickupLocationPicker from '../components/common/PickupLocationPicker';
 import VoiceBookingModal from '../components/farmer/VoiceBookingModal';
-import { pricesApi, fastTrackApi } from '../api';
+import { pricesApi, fastTrackApi, apiClient, BASE_URL } from '../api';
 import {
 
   MapPin, Clock, Zap, TrendingUp, TrendingDown, Minus,
@@ -183,11 +183,13 @@ function printStageReceipt({ token, stage }) {
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 /** Mandi Discovery Card */
-function MandiCard({ mandi, onSelect, isSelected, routeInfo }) {
+function MandiCard({ mandi, onSelect, isSelected, routeInfo, queueCount, liveRates, isLiveTelemetry }) {
   const c = congestionColor(mandi.color);
   const distanceDisplay = routeInfo?.distanceKm ? `${routeInfo.distanceKm} km` : `${mandi.distance} km`;
   const travelTimeDisplay = routeInfo?.durationMins ? `~${routeInfo.durationMins} mins` : mandi.travelTime;
   const isOsrm = routeInfo?.isOsrm;
+  const effectiveQueueCount = queueCount !== undefined ? queueCount : getMandiQueueCount(mandi.id);
+  const effectiveRates = (liveRates && liveRates.today && Object.keys(liveRates.today).length > 0) ? liveRates : mandi.rates;
 
   return (
     <div
@@ -210,9 +212,19 @@ function MandiCard({ mandi, onSelect, isSelected, routeInfo }) {
             </p>
           </div>
         </div>
-        <span className={`shrink-0 text-xs font-semibold px-2.5 py-1 rounded-full border ${c.badge}`}>
-          {mandi.congestion}
-        </span>
+        <div className="flex flex-col items-end gap-1">
+          <span className={`shrink-0 text-xs font-semibold px-2.5 py-0.5 rounded-full border ${c.badge}`}>
+            {mandi.congestion}
+          </span>
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border ${
+            isLiveTelemetry
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : 'bg-amber-50 text-amber-700 border-amber-200'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isLiveTelemetry ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+            {isLiveTelemetry ? 'Live Queue' : 'Simulated'}
+          </span>
+        </div>
       </div>
 
       <div className="flex items-center gap-4 text-xs text-slate-600 mb-3">
@@ -231,7 +243,7 @@ function MandiCard({ mandi, onSelect, isSelected, routeInfo }) {
         </span>
         <span className="flex items-center gap-1">
           <Users className="w-3 h-3 text-slate-400" />
-          Queue: {getMandiQueueCount(mandi.id)}
+          Queue: <strong className="text-slate-800 font-mono">{effectiveQueueCount}</strong>
         </span>
       </div>
 
@@ -271,7 +283,9 @@ function BookingPanel({
   onViewActiveToken,
   farmerCoords,
   pickupLocation,
-  onRequestPickupLocation
+  onRequestPickupLocation,
+  isLiveTelemetry = false,
+  liveRates = null
 }) {
   const [crop, setCrop] = useState(mandi?.cropsHandled?.[0] || 'Wheat');
   const [quantity, setQuantity] = useState(10);
@@ -399,11 +413,15 @@ function BookingPanel({
     }
   };
 
-  // Dynamic live rate fetching for the selected APMC mandi
-  const [liveRates, setLiveRates] = useState(mandi.rates || { today: {}, yesterday: {} });
+  // Dynamic live rate fetching with local fallback
+  const [internalLiveRates, setInternalLiveRates] = useState(liveRates || mandi.rates || { today: {}, yesterday: {} });
 
   useEffect(() => {
     let isMounted = true;
+    if (liveRates && liveRates.today && Object.keys(liveRates.today).length > 0) {
+      setInternalLiveRates(liveRates);
+      return;
+    }
     const fetchRates = async () => {
       try {
         const res = await pricesApi.getPricesByMandi(mandi.id);
@@ -414,17 +432,19 @@ function BookingPanel({
             newRates.today[p.crop] = p.marketPriceToday;
             newRates.yesterday[p.crop] = p.marketPriceYesterday !== null && p.marketPriceYesterday !== undefined ? p.marketPriceYesterday : p.mspPrice;
           });
-          setLiveRates(newRates);
+          setInternalLiveRates(newRates);
         }
       } catch (err) {
-        console.debug('Failed to fetch live mandi rates for BookingPanel:', err.message);
+        console.debug('Using fallback mandi rates for BookingPanel:', err.message);
       }
     };
     fetchRates();
     return () => { isMounted = false; };
-  }, [mandi.id]);
+  }, [mandi.id, liveRates]);
 
-  const rates = liveRates.today && Object.keys(liveRates.today).length > 0 ? liveRates : (mandi.rates || { today: {}, yesterday: {} });
+  const rates = (internalLiveRates?.today && Object.keys(internalLiveRates.today).length > 0)
+    ? internalLiveRates
+    : (mandi.rates || { today: {}, yesterday: {} });
   const availCrops = (mandi?.cropsHandled || []).filter((c) => rates?.today && rates?.today?.[c]);
 
   return (
@@ -437,9 +457,13 @@ function BookingPanel({
         </div>
         <h3 className="text-white font-black text-lg">{mandi.name}</h3>
         <div className="flex items-center gap-2 mt-1">
-          <span className="inline-flex items-center gap-1 text-[10px] bg-white/20 text-white px-2 py-0.5 rounded-full font-semibold">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-300 animate-pulse inline-block" />
-            LIVE RATES
+          <span className={`inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-bold border ${
+            isLiveTelemetry
+              ? 'bg-emerald-400/20 text-emerald-100 border-emerald-300/30'
+              : 'bg-amber-400/20 text-amber-100 border-amber-300/30'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isLiveTelemetry ? 'bg-emerald-300 animate-pulse' : 'bg-amber-300'}`} />
+            {isLiveTelemetry ? 'LIVE DATA' : 'OFFLINE / SIMULATED'}
           </span>
           <span className="text-[10px] text-white/70">{today}</span>
         </div>
@@ -1917,6 +1941,76 @@ export default function FarmerCommandCenter() {
   const [cancelModalToken, setCancelModalToken] = useState(null);
   const [isCancelling, setIsCancelling] = useState(false);
 
+  // Live Telemetry & Queue Telemetry States (Live First, Mock Fallback)
+  const [isLiveTelemetry, setIsLiveTelemetry] = useState(false);
+  const [mandiQueueCounts, setMandiQueueCounts] = useState({});
+  const [liveMandiRates, setLiveMandiRates] = useState({});
+
+  /**
+   * Fetch Live Telemetry (Rates & Queue Counts) with graceful fallback to localStorage & seed data
+   */
+  const fetchLiveTelemetry = useCallback(async () => {
+    try {
+      // 1. Fetch live prices for all mandis
+      const pricesRes = await pricesApi.getAllPrices().catch(() => null);
+      const prices = Array.isArray(pricesRes) ? pricesRes : pricesRes?.data || [];
+
+      const ratesMap = {};
+      if (prices.length > 0) {
+        prices.forEach((p) => {
+          const mId = (p.mandiId || '').toUpperCase().trim();
+          if (!ratesMap[mId]) ratesMap[mId] = { today: {}, yesterday: {} };
+          if (p.crop) {
+            ratesMap[mId].today[p.crop] = p.marketPriceToday;
+            ratesMap[mId].yesterday[p.crop] = p.marketPriceYesterday !== null && p.marketPriceYesterday !== undefined
+              ? p.marketPriceYesterday
+              : p.mspPrice;
+          }
+        });
+      }
+
+      // 2. Fetch live queue counts across all 6 APMC mandis
+      const countMap = {};
+      await Promise.all(
+        MANDIS.map(async (m) => {
+          try {
+            const tokRes = await fetch(`${BASE_URL}/tokens/mandi/${m.id}`, { signal: AbortSignal.timeout(3000) });
+            if (tokRes.ok) {
+              const tokData = await tokRes.json();
+              if (tokData?.success && Array.isArray(tokData.tokens)) {
+                const activeCount = tokData.tokens.filter(
+                  (t) => !['Completed', 'COMPLETED', 'Cancelled', 'CANCELLED'].includes(t.status)
+                ).length;
+                countMap[m.id] = activeCount;
+              } else {
+                countMap[m.id] = getMandiQueueCount(m.id);
+              }
+            } else {
+              countMap[m.id] = getMandiQueueCount(m.id);
+            }
+          } catch {
+            countMap[m.id] = getMandiQueueCount(m.id);
+          }
+        })
+      );
+
+      setLiveMandiRates(ratesMap);
+      setMandiQueueCounts(countMap);
+      setIsLiveTelemetry(true);
+      return true;
+    } catch (err) {
+      console.debug('[FarmerCommandCenter] Live telemetry unavailable, engaging simulated fallback:', err.message);
+      // Graceful fallback to mock data & localStorage
+      const countMap = {};
+      MANDIS.forEach((m) => {
+        countMap[m.id] = getMandiQueueCount(m.id);
+      });
+      setMandiQueueCounts(countMap);
+      setIsLiveTelemetry(false);
+      return false;
+    }
+  }, []);
+
   // 1. Acquire farmer coordinates (prioritizing saved pickupLocation pin) & calculate multi-mandi OSRM road matrix
   useEffect(() => {
     let isMounted = true;
@@ -1991,7 +2085,8 @@ export default function FarmerCommandCenter() {
 
       const [fetchedTokens, duesData] = await Promise.all([
         getTokensAsync(farmerPhone),
-        getFarmerProfileDuesApi(farmerPhone)
+        getFarmerProfileDuesApi(farmerPhone),
+        fetchLiveTelemetry()
       ]);
 
       if (duesData) {
@@ -2005,6 +2100,8 @@ export default function FarmerCommandCenter() {
           if (t.mandiId) joinMandiRoom(t.mandiId);
         });
       }
+      // Join all APMC mandi rooms for live queue telemetry broadcasts
+      MANDIS.forEach((m) => joinMandiRoom(m.id));
       setIsLoadingTokens(false);
     };
 
@@ -2013,11 +2110,32 @@ export default function FarmerCommandCenter() {
     // Subscribe to Socket.IO connection status
     const unsubConn = subscribeConnectionStatus((connected) => {
       setSocketConnected(connected);
+      if (connected) {
+        fetchLiveTelemetry();
+        MANDIS.forEach((m) => joinMandiRoom(m.id));
+      } else {
+        setIsLiveTelemetry(false);
+      }
+    });
+
+    // Listen for live NEW_BOOKING broadcast from all mandis
+    const unsubNewBooking = onNewBooking((data) => {
+      console.log('⚡ [Farmer Command Center] Live NEW_BOOKING received:', data);
+      setIsLiveTelemetry(true);
+      if (data?.mandiId) {
+        setMandiQueueCounts((prev) => ({
+          ...prev,
+          [data.mandiId]: (prev[data.mandiId] || 0) + 1
+        }));
+      } else {
+        fetchLiveTelemetry();
+      }
     });
 
     // Listen for live STAGE_UPDATED broadcast from Admin / Officers
     const unsubStage = onStageUpdated((data) => {
       console.log('⚡ [Farmer Command Center] Live STAGE_UPDATED event received:', data);
+      setIsLiveTelemetry(true);
       const updatedToken = data.token;
       const tokenNum = data.tokenNumber || updatedToken?.tokenNumber || updatedToken?.id;
 
@@ -2067,8 +2185,16 @@ export default function FarmerCommandCenter() {
     // ─── Real-Time Token Completed & Settlement Listener ───────────────────────
     const unsubCompleted = onTokenCompleted((data) => {
       console.log('🎉 [Farmer Command Center] Live TOKEN_COMPLETED event received:', data);
+      setIsLiveTelemetry(true);
       const updatedToken = data.token;
       const tokenNum = data.tokenNumber || updatedToken?.tokenNumber || updatedToken?.id;
+
+      if (data.mandiId) {
+        setMandiQueueCounts((prev) => ({
+          ...prev,
+          [data.mandiId]: Math.max(0, (prev[data.mandiId] || 1) - 1)
+        }));
+      }
 
       setTokens((prev) =>
         prev.map((t) => {
@@ -2115,7 +2241,15 @@ export default function FarmerCommandCenter() {
     // ─── Real-Time Token Cancellation Socket Listener ──────────────────────────
     const unsubCancelled = onTokenCancelled((data) => {
       console.log('🛑 [Farmer Command Center] Live TOKEN_CANCELLED event received:', data);
+      setIsLiveTelemetry(true);
       const tokenNum = data.tokenNumber;
+
+      if (data.mandiId) {
+        setMandiQueueCounts((prev) => ({
+          ...prev,
+          [data.mandiId]: Math.max(0, (prev[data.mandiId] || 1) - 1)
+        }));
+      }
 
       setTokens((prev) =>
         prev.map((t) => {
@@ -2216,9 +2350,11 @@ export default function FarmerCommandCenter() {
 
     // ─── Real-Time Queue Slot Freed Listener ───────────────────────────────────
     const unsubFreed = onQueueSlotFreed(() => {
+      setIsLiveTelemetry(true);
       getTokensAsync(farmerPhone).then((fresh) => {
         if (Array.isArray(fresh)) setTokens(fresh);
       });
+      fetchLiveTelemetry();
     });
 
     // Periodic health check & fallback polling (every 4s if socket disconnected)
@@ -2233,11 +2369,13 @@ export default function FarmerCommandCenter() {
         ]);
         if (Array.isArray(polled)) setTokens(polled);
         if (dues) setFarmerProfile(dues);
+        fetchLiveTelemetry();
       }
     }, 4000);
 
     return () => {
       unsubConn();
+      unsubNewBooking();
       unsubStage();
       unsubPool();
       unsubCompleted();
@@ -2248,7 +2386,7 @@ export default function FarmerCommandCenter() {
       unsubFreed();
       clearInterval(interval);
     };
-  }, [farmerPhone, socketConnected, terminalToken]);
+  }, [farmerPhone, socketConnected, terminalToken, fetchLiveTelemetry]);
 
   const refreshTokens = useCallback(async () => {
     setIsLoadingTokens(true);
@@ -2663,7 +2801,23 @@ export default function FarmerCommandCenter() {
           <div>
             <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
-                <h1 className="text-2xl font-black text-slate-900">Nearby APMC Mandi Discovery</h1>
+                <div className="flex items-center gap-2.5">
+                  <h1 className="text-2xl font-black text-slate-900">Nearby APMC Mandi Discovery</h1>
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border transition-colors ${
+                      isLiveTelemetry
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                        : 'bg-amber-50 text-amber-700 border-amber-300'
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        isLiveTelemetry ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                      }`}
+                    />
+                    {isLiveTelemetry ? 'Live Data' : 'Offline / Simulated'}
+                  </span>
+                </div>
                 <p className="text-sm text-slate-500 mt-1 flex items-center gap-1">
                   <MapPin className="w-3.5 h-3.5 text-emerald-500" />
                   Showing mandis near <strong className="text-slate-700">Kopargaon, Ahmednagar (MH)</strong> — sorted by distance
@@ -2705,6 +2859,9 @@ export default function FarmerCommandCenter() {
                     routeInfo={mandiMatrix[mandi.id]}
                     onSelect={handleMandiSelect}
                     isSelected={selectedMandi?.id === mandi.id}
+                    queueCount={mandiQueueCounts[mandi.id]}
+                    liveRates={liveMandiRates[mandi.id]}
+                    isLiveTelemetry={isLiveTelemetry}
                   />
                 ))}
               </div>
@@ -2730,6 +2887,8 @@ export default function FarmerCommandCenter() {
                       farmerCoords={farmerCoords}
                       pickupLocation={user?.pickupLocation}
                       onRequestPickupLocation={handleRequestPickupLocation}
+                      isLiveTelemetry={isLiveTelemetry}
+                      liveRates={liveMandiRates[selectedMandi.id]}
                     />
 
                   </div>

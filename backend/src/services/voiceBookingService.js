@@ -607,10 +607,14 @@ const voiceBookingService = {
   /**
    * Process spoken audio answer for current session step
    */
-  processAnswer: async (sessionId, { audioBuffer, mimeType = 'audio/webm', textAnswer = null }) => {
+  processAnswer: async (sessionId, { audioBuffer, mimeType = 'audio/webm', textAnswer = null, language = null }) => {
     const session = inMemoryVoiceSessions.get(sessionId);
     if (!session) {
       throw new Error('Voice session expired or not found. Please start a new voice booking.');
+    }
+
+    if (language) {
+      session.language = language;
     }
 
     // Refresh session expiry
@@ -624,7 +628,7 @@ const voiceBookingService = {
     }
 
     const field = currentStepConfig.field;
-    const lang = session.language;
+    const lang = session.language || language || 'mr';
 
     let parsedResult = null;
 

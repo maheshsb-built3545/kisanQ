@@ -293,23 +293,31 @@ const broadcastQueueSlotFreed = (io, mandiId, queueData) => {
  */
 const broadcastFastTrackRequested = (io, mandiId, request) => {
   if (!io) return;
+  const cleanMandiId = (mandiId || '').replace(/^mandi:/, '');
   const payload = {
-    event: 'FAST_TRACK_REQUESTED',
-    mandiId,
+    event: 'FAST_TRACK_NEW_REQUEST',
+    mandiId: cleanMandiId,
     request,
+    ...request,
     timestamp: new Date().toISOString()
   };
 
-  if (mandiId) {
-    io.to(`mandi:${mandiId}`).emit('FAST_TRACK_REQUESTED', payload);
-    io.to(`centre_${mandiId}`).emit('FAST_TRACK_REQUESTED', payload);
+  if (cleanMandiId) {
+    io.to(`mandi:${cleanMandiId}`).emit('FAST_TRACK_NEW_REQUEST', payload);
+    io.to(`mandi:[${cleanMandiId}]`).emit('FAST_TRACK_NEW_REQUEST', payload);
+    io.to(`centre_${cleanMandiId}`).emit('FAST_TRACK_NEW_REQUEST', payload);
+    io.to(`mandi:${cleanMandiId}`).emit('FAST_TRACK_REQUESTED', payload);
+    io.to(`centre_${cleanMandiId}`).emit('FAST_TRACK_REQUESTED', payload);
   }
   if (request.tokenNumber) {
+    io.to(`token:${request.tokenNumber}`).emit('FAST_TRACK_NEW_REQUEST', payload);
     io.to(`token:${request.tokenNumber}`).emit('FAST_TRACK_REQUESTED', payload);
   }
+  io.to('admin_room').emit('FAST_TRACK_NEW_REQUEST', payload);
   io.to('admin_room').emit('FAST_TRACK_REQUESTED', payload);
+  io.emit('FAST_TRACK_NEW_REQUEST', payload);
   io.emit('FAST_TRACK_REQUESTED', payload);
-  logger.info(`[Socket.IO] Broadcast FAST_TRACK_REQUESTED for ${request.tokenNumber} (Mandi: ${mandiId})`);
+  logger.info(`[Socket.IO] Broadcast FAST_TRACK_NEW_REQUEST for ${request.tokenNumber} (Mandi: ${cleanMandiId})`);
 };
 
 /**

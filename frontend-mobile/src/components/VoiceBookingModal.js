@@ -11,7 +11,8 @@ import {
   Animated,
   Platform,
   Dimensions,
-  Alert
+  Alert,
+  Linking
 } from 'react-native';
 import { Audio } from 'expo-av';
 import { useTranslation } from 'react-i18next';
@@ -82,7 +83,9 @@ export default function VoiceBookingModal({
   const [showTypeInput, setShowTypeInput] = useState(false);
   const [isOffline, setIsOffline] = useState(false);
   const [hasPermission, setHasPermission] = useState(null);
+  const [canAskAgain, setCanAskAgain] = useState(true);
   const [permissionExplaining, setPermissionExplaining] = useState(false);
+  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
 
   // Completed booking data
   const [completedResult, setCompletedResult] = useState(null);
@@ -200,6 +203,7 @@ export default function VoiceBookingModal({
     setShowTypeInput(false);
     setIsOffline(false);
     setCompletedResult(null);
+    setConsecutiveFailures(0);
     startNewSession(language);
   };
 
@@ -227,6 +231,7 @@ export default function VoiceBookingModal({
         setCollectedData(data.collectedData || {});
         setShowTypeInput(false);
         setManualText('');
+        setConsecutiveFailures(0);
 
         // Auto-play the first question
         speakQuestionAudio(data.sessionId, data.step || 1, 'question', lang, data.audioUrl);
@@ -275,35 +280,62 @@ export default function VoiceBookingModal({
     }
   };
 
-  const handleAudioFinished = () => {
-    // Check mic permission
-    Audio.getPermissionsAsync().then((perm) => {
+  const handleAudioFinished = async () => {
+    try {
+      const perm = await Audio.getPermissionsAsync();
       if (!isMountedRef.current) return;
+      setHasPermission(perm.granted);
+      setCanAskAgain(perm.canAskAgain !== false);
+
       if (!perm.granted) {
         setPermissionExplaining(true);
         setConvState('INITIALIZING');
+        if (perm.canAskAgain === false) {
+          setShowTypeInput(true);
+        }
       } else {
         startRecording();
       }
-    });
+    } catch (e) {
+      if (!isMountedRef.current) return;
+      setPermissionExplaining(true);
+      setShowTypeInput(true);
+    }
+  };
+
+  const handleOpenSettings = async () => {
+    try {
+      await Linking.openSettings();
+    } catch (err) {
+      console.warn('[VoiceBooking] Unable to open app settings:', err.message);
+    }
   };
 
   // ─── Request Microphone Permission ─────────────────────────────────────────
   const requestMicPermission = async () => {
     try {
-      const { granted } = await Audio.requestPermissionsAsync();
-      setHasPermission(granted);
-      setPermissionExplaining(false);
-      if (granted) {
+      const perm = await Audio.requestPermissionsAsync();
+      setHasPermission(perm.granted);
+      setCanAskAgain(perm.canAskAgain !== false);
+
+      if (perm.granted) {
+        setPermissionExplaining(false);
         startRecording();
       } else {
-        Alert.alert(
-          language === 'mr' ? 'मायक्रोफोन परवानगी आवश्यक' : language === 'hi' ? 'माइक्रोफ़ोन अनुमति आवश्यक' : 'Microphone Permission Required',
-          language === 'mr' ? 'व्हॉईस बुकिंगसाठी मायक्रोफोन परवानगी आवश्यक आहे. कृपया सेटिंग्जमध्ये परवानगी द्या.' : 'Please enable microphone access in settings to use voice booking.'
-        );
+        setPermissionExplaining(true);
+        if (perm.canAskAgain === false) {
+          // Hard permission denial -> immediately unlock manual input
+          setShowTypeInput(true);
+        } else {
+          Alert.alert(
+            language === 'mr' ? 'मायक्रोफोन परवानगी आवश्यक' : language === 'hi' ? 'माइक्रोफ़ोन अनुमति आवश्यक' : 'Microphone Permission Required',
+            language === 'mr' ? 'व्हॉईस बुकिंगसाठी मायक्रोफोन परवानगी आवश्यक आहे. कृपया परवानगी द्या किंवा खालील पर्यायातून टाईप करा.' : 'Please enable microphone access to use voice booking, or type instead.'
+          );
+        }
       }
     } catch (e) {
-      setPermissionExplaining(false);
+      setPermissionExplaining(true);
+      setShowTypeInput(true);
     }
   };
 
@@ -399,10 +431,11 @@ export default function VoiceBookingModal({
         throw new Error('No audio recording found');
       }
 
-      submitAnswerToBackend({ audioUri: uri, mimeType: 'audio/m4a' });
+      submitAnswerToBackend({ audioUri: uri, mimeType: 'audio/m4a', language });
     } catch (err) {
       console.warn('[VoiceBooking] Stop recording error:', err);
       if (isMountedRef.current) {
+        await cleanupAudio();
         setErrorMessage('Failed to capture audio. Please try again or type.');
         setConvState('INITIALIZING');
       }
@@ -413,7 +446,7 @@ export default function VoiceBookingModal({
   const submitTextAnswer = (textToSubmit = manualText) => {
     const text = (textToSubmit || '').trim();
     if (!text) return;
-    submitAnswerToBackend({ textAnswer: text });
+    submitAnswerToBackend({ textAnswer: text, language });
   };
 
   // ─── Backend Communication & State Handling ──────────────────────────────
@@ -424,12 +457,27 @@ export default function VoiceBookingModal({
       return;
     }
 
+    const payloadWithLang = {
+      language,
+      ...payload
+    };
+
     setConvState('PROCESSING');
     setErrorMessage('');
     setIsOffline(false);
 
     try {
-      const result = await voiceBookingApi.sendAnswer(sessionId, payload);
+      console.log(`[VoiceBooking] Dispatching payload to /api/voice-booking/${sessionId}/answer:`, {
+        type: payloadWithLang.audioUri ? 'multipart/form-data (Native Audio Recording)' : 'textAnswer (Manual Keyed Input)',
+        language: payloadWithLang.language,
+        audioUri: payloadWithLang.audioUri || null,
+        mimeType: payloadWithLang.mimeType || (payloadWithLang.audioUri ? 'audio/m4a' : 'text/plain'),
+        textAnswer: payloadWithLang.textAnswer || null,
+        activeStep: step,
+        consecutiveFailures
+      });
+
+      const result = await voiceBookingApi.sendAnswer(sessionId, payloadWithLang);
       if (!isMountedRef.current) return;
 
       if (!result || !result.success) {
@@ -447,6 +495,7 @@ export default function VoiceBookingModal({
 
       // 1. Flow Completion Check
       if (result.complete && (result.bookingSummary || result.token)) {
+        setConsecutiveFailures(0);
         setConvState('COMPLETED');
         setCompletedResult(result.bookingSummary || result.token);
         setShowTypeInput(false);
@@ -455,10 +504,13 @@ export default function VoiceBookingModal({
 
       // 2. Retry / Clarification Check
       if (result.retry || result.status === 'UNCLEAR') {
+        const nextFailures = consecutiveFailures + 1;
+        setConsecutiveFailures(nextFailures);
         setClarification(result.message || 'Could not understand clearly.');
 
-        // Retry Exhaustion: 2 consecutive unclear answers -> fallbackToManual
-        if (result.fallbackToManual || result.retriesLeft === 0) {
+        // Retry Exhaustion: 2 consecutive unclear audio submissions -> automatically flip to "Type instead"
+        if (nextFailures >= 2 || result.fallbackToManual || result.retriesLeft === 0) {
+          console.log(`[VoiceBooking] Retry Exhaustion Triggered: ${nextFailures} consecutive unclear answers. Automatically flipping UI to 'Type instead' manual input.`);
           setShowTypeInput(true);
         }
 
@@ -473,8 +525,9 @@ export default function VoiceBookingModal({
         return;
       }
 
-      // 3. Valid Step Completed -> Auto Advance
+      // 3. Valid Step Completed -> Auto Advance & Reset Failure Count
       if (result.status === 'VALID' || result.step) {
+        setConsecutiveFailures(0); // Reset consecutive failure counter on valid response
         setStep(result.nextStepIndex || result.step);
         setFieldTitle(result.fieldTitle || 'Next Step');
         setQuestionText(result.question || '');
@@ -495,12 +548,21 @@ export default function VoiceBookingModal({
       console.warn('[VoiceBooking] Answer processing error:', err);
       if (!isMountedRef.current) return;
 
+      await cleanupAudio();
+
+      const nextFailures = consecutiveFailures + 1;
+      setConsecutiveFailures(nextFailures);
+      if (nextFailures >= 2) {
+        console.log(`[VoiceBooking] Retry Exhaustion on Network/Processing Error: ${nextFailures} failures. Automatically flipping UI to 'Type instead' manual mode.`);
+        setShowTypeInput(true);
+      }
+
       const isNetworkErr = !err.response || err.code === 'ECONNABORTED' || err.message?.includes('Network');
       if (isNetworkErr) {
         setIsOffline(true);
-        setErrorMessage('Network connection lost. Check connectivity and retry.');
+        setErrorMessage('Network connection lost. Check connectivity or type instead.');
       } else {
-        setErrorMessage(err.response?.data?.message || err.message || 'Error processing response');
+        setErrorMessage(err.response?.data?.message || err.message || 'Error processing response. You can type instead.');
       }
       setConvState('INITIALIZING');
     }
@@ -646,20 +708,42 @@ export default function VoiceBookingModal({
               <View style={styles.permissionCard}>
                 <Text style={styles.permissionIcon}>🎙️</Text>
                 <Text style={styles.permissionTitle}>
-                  {language === 'mr' ? 'मायक्रोफोन परवानगी द्या' : language === 'hi' ? 'माइक्रोफ़ोन अनुमति दें' : 'Allow Microphone Access'}
+                  {language === 'mr' ? 'मायक्रोफोन परवानगी आवश्यक' : language === 'hi' ? 'माइक्रोफ़ोन अनुमति आवश्यक' : 'Microphone Access Required'}
                 </Text>
                 <Text style={styles.permissionText}>
                   {language === 'mr'
-                    ? 'आपल्या आवाजाने थेट मराठी/हिंदीत माहिती भरण्यासाठी मायक्रोफोन परवानगी आवश्यक आहे.'
+                    ? 'आपल्या आवाजाने थेट मराठी/हिंदीत माहिती भरण्यासाठी मायक्रोफोन परवानगी आवश्यक आहे. आपण थेट उत्तर टाईप देखील करू शकता.'
                     : language === 'hi'
-                    ? 'अपनी आवाज़ से सीधे बुकिंग करने के लिए माइक्रोफ़ोन एक्सेस की आवश्यकता है।'
-                    : 'KisanQ requires microphone access to transcribe your spoken answers into booking details.'}
+                    ? 'अपनी आवाज़ से सीधे बुकिंग करने के लिए माइक्रोफ़ोन एक्सेस की आवश्यकता है। आप उत्तर टाइप भी कर सकते हैं।'
+                    : 'KisanQ requires microphone access to transcribe your spoken answers into booking details. You can also choose to type manually.'}
                 </Text>
-                <TouchableOpacity style={styles.grantPermBtn} onPress={requestMicPermission} activeOpacity={0.8}>
-                  <Text style={styles.grantPermBtnText}>
-                    {language === 'mr' ? 'परवानगी द्या / Allow' : language === 'hi' ? 'अनुमति दें / Allow' : 'Grant Permission'}
-                  </Text>
-                </TouchableOpacity>
+                <View style={styles.permissionBtnRow}>
+                  {canAskAgain !== false ? (
+                    <TouchableOpacity style={styles.grantPermBtn} onPress={requestMicPermission} activeOpacity={0.8}>
+                      <Text style={styles.grantPermBtnText}>
+                        {language === 'mr' ? '🎙️ परवानगी द्या / Allow' : language === 'hi' ? '🎙️ अनुमति दें / Allow' : '🎙️ Grant Permission'}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity style={styles.grantPermBtn} onPress={handleOpenSettings} activeOpacity={0.8}>
+                      <Text style={styles.grantPermBtnText}>
+                        {language === 'mr' ? '⚙️ सेटिंग्ज उघडा / Open Settings' : language === 'hi' ? '⚙️ सेटिंग्स खोलें / Open Settings' : '⚙️ Open App Settings'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={styles.typeInsteadPermBtn}
+                    onPress={() => {
+                      setPermissionExplaining(false);
+                      setShowTypeInput(true);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.typeInsteadPermBtnText}>
+                      {language === 'mr' ? '⌨️ टाईप करा / Type Instead' : language === 'hi' ? '⌨️ टाइप करें / Type Instead' : '⌨️ Type Instead'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
 
@@ -1388,16 +1472,42 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     lineHeight: 16
   },
+  permissionBtnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginTop: 4
+  },
   grantPermBtn: {
     backgroundColor: '#2563eb',
-    paddingVertical: 8,
+    paddingVertical: 9,
     paddingHorizontal: 16,
-    borderRadius: 16
+    borderRadius: 14,
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3
   },
   grantPermBtnText: {
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '800'
+  },
+  typeInsteadPermBtn: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#cbd5e1',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 14
+  },
+  typeInsteadPermBtnText: {
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '700'
   },
   summaryCard: {
     paddingVertical: 8

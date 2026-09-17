@@ -25,7 +25,7 @@ export const voiceBookingApi = {
    * @param {string} sessionId
    * @param {Object} payload - { audioUri, audioBase64, mimeType, textAnswer }
    */
-  sendAnswer: async (sessionId, { audioUri, audioBase64, mimeType, textAnswer }) => {
+  sendAnswer: async (sessionId, { audioUri, audioBase64, mimeType, textAnswer, language = 'mr' }) => {
     if (audioUri) {
       const formData = new FormData();
       const ext = mimeType?.includes('wav') ? 'wav' : mimeType?.includes('mp4') ? 'mp4' : mimeType?.includes('m4a') ? 'm4a' : 'm4a';
@@ -38,6 +38,9 @@ export const voiceBookingApi = {
       });
 
       formData.append('mimeType', type);
+      if (language) {
+        formData.append('language', language);
+      }
 
       const response = await client.post(`/voice-booking/${sessionId}/answer`, formData, {
         headers: {
@@ -49,7 +52,8 @@ export const voiceBookingApi = {
     } else if (audioBase64) {
       const response = await client.post(`/voice-booking/${sessionId}/answer`, {
         audioBase64,
-        mimeType: mimeType || 'audio/m4a'
+        mimeType: mimeType || 'audio/m4a',
+        language
       }, {
         timeout: 40000
       });
@@ -57,7 +61,8 @@ export const voiceBookingApi = {
     } else {
       const response = await client.post(`/voice-booking/${sessionId}/answer`, {
         textAnswer,
-        mimeType: 'text/plain'
+        mimeType: 'text/plain',
+        language
       }, {
         timeout: 25000
       });

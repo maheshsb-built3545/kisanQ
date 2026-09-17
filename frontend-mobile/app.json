@@ -8,7 +8,8 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "platforms": [
-      "android"
+      "android",
+      "ios"
     ],
     "android": {
       "package": "com.aveniq.kisanq",
@@ -24,11 +25,18 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       }
     },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.aveniq.kisanq",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Allow KisanQ to access your microphone for hands-free voice booking in Marathi and Hindi."
+      }
+    },
     "plugins": [
       [
         "expo-av",
         {
-          "microphonePermission": "Allow KisanQ to access your microphone for hands-free voice booking."
+          "microphonePermission": "Allow KisanQ to access your microphone for hands-free voice booking in Marathi and Hindi."
         }
       ]
     ],

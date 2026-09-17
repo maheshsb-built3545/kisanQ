@@ -694,16 +694,18 @@ export default function StaffDesk() {
     });
 
     const unsubFtReq = onFastTrackRequested((data) => {
+      console.log('⚡ [StaffDesk] FAST_TRACK_NEW_REQUEST socket payload received:', data);
       const req = data.request || data;
-      if (req.mandiId === activeMandiId || !req.mandiId) {
+      const targetMandi = req.mandiId || data.mandiId;
+      if (!targetMandi || targetMandi === activeMandiId || targetMandi.startsWith(activeMandiId.split('-')[0])) {
         setFastTrackRequests((prev) => {
           const reqId = req._id || req.id;
-          if (prev.some((r) => (r._id || r.id) === reqId)) return prev;
+          if (prev.some((r) => (r._id || r.id) === reqId || r.tokenNumber === req.tokenNumber)) return prev;
           return [req, ...prev];
         });
         setActionSuccessToast({
           title: '⚡ FAST-TRACK REQUESTED',
-          message: `Token #${req.tokenNumber || data.tokenNumber} requested Tier ${req.tier || data.tier}% priority!`,
+          message: `Token #${req.tokenNumber || data.tokenNumber} requested Tier ₹${req.tier || data.tier}/Qtl priority!`,
           tokenNumber: req.tokenNumber || data.tokenNumber || 'PRIORITY',
         });
       }

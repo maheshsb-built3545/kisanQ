@@ -49,7 +49,7 @@ router.post('/start', async (req, res) => {
 router.post('/:sessionId/answer', upload.single('audio'), async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const { textAnswer, mimeType: bodyMimeType, audioBase64 } = req.body;
+    const { textAnswer, mimeType: bodyMimeType, audioBase64, language } = req.body;
 
     let audioBuffer = null;
     let mimeType = bodyMimeType || 'audio/webm';
@@ -65,7 +65,8 @@ router.post('/:sessionId/answer', upload.single('audio'), async (req, res) => {
     const result = await voiceBookingService.processAnswer(sessionId, {
       audioBuffer,
       mimeType,
-      textAnswer
+      textAnswer,
+      language
     });
 
     logger.info(`[VoiceBooking] Processed answer for session ${sessionId} (Step ${result.step}, Complete: ${result.complete || false}, Retry: ${result.retry || false})`);

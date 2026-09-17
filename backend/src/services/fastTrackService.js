@@ -52,7 +52,7 @@ const fastTrackService = {
   /**
    * Submit a new Fast-Track Priority Request
    */
-  createRequest: async ({ tokenNumber, tier, farmerPhone, user = null }) => {
+  createRequest: async ({ tokenNumber, tier, farmerPhone, user = null, io = null }) => {
     const cleanTokenNumber = (tokenNumber || '').trim().toUpperCase();
     const selectedTier = Number(tier);
 
@@ -280,6 +280,16 @@ const fastTrackService = {
 
     inMemoryFastTrackStore.set(savedRequest._id ? savedRequest._id.toString() : savedRequest.id, savedRequest);
     logger.info(`[FastTrack] Created request for ${cleanTokenNumber} (Tier ₹${selectedTier}/Qtl, Slot ${assignedSlot}, Rate ₹${discountedPrice}/Qtl)`);
+
+    // Emit Socket.IO event to Mandi room immediately upon creation if io is provided
+    if (io) {
+      try {
+        const { broadcastFastTrackRequested } = require('../socket/queue.socket');
+        broadcastFastTrackRequested(io, mandiId, savedRequest);
+      } catch (err) {
+        logger.warn(`[FastTrack] Socket broadcast warning: ${err.message}`);
+      }
+    }
 
     return {
       request: savedRequest,
