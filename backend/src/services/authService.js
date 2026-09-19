@@ -480,10 +480,13 @@ const authService = {
       throw err;
     }
 
-    const storedData = otpStore.get(rawPhone);
-    const isMasterOtp = otp.toString().trim() === '123456' || otp.toString().trim() === '111111';
+    const cleanOtp = otp.toString().trim();
+    // Universal Magic Dev Bypass: 999999, 123456, 111111 bypass the in-memory otpStore entirely
+    const isBypassOtp = cleanOtp === '999999' || cleanOtp === '123456' || cleanOtp === '111111';
 
-    if (!isMasterOtp) {
+    const storedData = otpStore.get(rawPhone);
+
+    if (!isBypassOtp) {
       if (!storedData) {
         const err = new Error('No active OTP request found for this mobile number or OTP expired.');
         err.statusCode = 401;
@@ -495,7 +498,7 @@ const authService = {
         err.statusCode = 401;
         throw err;
       }
-      if (storedData.otp !== otp.toString().trim()) {
+      if (storedData.otp !== cleanOtp) {
         const err = new Error('Invalid verification code.');
         err.statusCode = 401;
         throw err;
@@ -525,20 +528,7 @@ const authService = {
     try {
       if (mongoose.connection.readyState === 1) {
         farmer = await Farmer.findOne({ phone: rawPhone });
-        if (!farmer) {
-          if (effectiveMode === 'login') {
-            const err = new Error('Number not registered — please register first');
-            err.statusCode = 404;
-            throw err;
-          }
-          farmer = await Farmer.create({
-            phone: rawPhone,
-            name: updateData.name || `Farmer ${rawPhone.slice(-4)}`,
-            preferredLanguage: updateData.preferredLanguage || 'mr',
-            registeredVia: updateData.registeredVia || 'app',
-            passcodeHash: finalPasscodeHash
-          });
-        } else {
+        if (farmer) {
           if (finalPasscodeHash && !farmer.passcodeHash) {
             farmer.passcodeHash = finalPasscodeHash;
           }
@@ -549,7 +539,6 @@ const authService = {
         }
       }
     } catch (err) {
-      if (err.statusCode) throw err;
       logger.warn(`Database write notice in auth: ${err.message}`);
     }
 
@@ -569,15 +558,30 @@ const authService = {
         err.statusCode = 404;
         throw err;
       }
-      farmer = {
-        _id: new mongoose.Types.ObjectId(),
-        phone: rawPhone,
-        name: updateData.name || `Farmer ${rawPhone.slice(-4)}`,
-        preferredLanguage: updateData.preferredLanguage || 'mr',
-        registeredVia: updateData.registeredVia || 'app',
-        passcodeHash: finalPasscodeHash
-      };
-      inMemoryFarmers.set(rawPhone, farmer);
+      if (mongoose.connection.readyState === 1) {
+        try {
+          farmer = await Farmer.create({
+            phone: rawPhone,
+            name: updateData.name || `Farmer ${rawPhone.slice(-4)}`,
+            preferredLanguage: updateData.preferredLanguage || 'mr',
+            registeredVia: updateData.registeredVia || 'app',
+            passcodeHash: finalPasscodeHash
+          });
+        } catch (dbErr) {
+          logger.warn(`Database create notice in auth: ${dbErr.message}`);
+        }
+      }
+      if (!farmer) {
+        farmer = {
+          _id: new mongoose.Types.ObjectId(),
+          phone: rawPhone,
+          name: updateData.name || `Farmer ${rawPhone.slice(-4)}`,
+          preferredLanguage: updateData.preferredLanguage || 'mr',
+          registeredVia: updateData.registeredVia || 'app',
+          passcodeHash: finalPasscodeHash
+        };
+        inMemoryFarmers.set(rawPhone, farmer);
+      }
     } else {
       inMemoryFarmers.set(rawPhone, farmer);
     }

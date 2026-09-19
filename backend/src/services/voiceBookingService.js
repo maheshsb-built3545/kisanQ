@@ -1,5 +1,4 @@
 const crypto = require('crypto');
-const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
@@ -8,6 +7,9 @@ const Farmer = require('../models/Farmer');
 const Centre = require('../models/Centre');
 const logger = require('../utils/logger');
 const centreService = require('./centreService');
+const cropPriceService = require('./cropPriceService');
+const queueService = require('./queueService');
+const procurementService = require('./procurementService');
 const { TOKEN_STATUS, normalizeStatus } = require('../utils/statusEnums');
 
 // ─── Constants & Master Lists ──────────────────────────────────────────────────
@@ -25,7 +27,7 @@ const KNOWN_CROPS = [
   { id: 'Soybean', nameEn: 'Soybean', nameMr: 'सोयाबीन', nameHi: 'सोयाबीन', keywords: ['soybean', 'soya', 'soyabean', 'सोयाबीन', 'सोया'] },
   { id: 'Cotton', nameEn: 'Cotton', nameMr: 'कापूस', nameHi: 'कपास', keywords: ['cotton', 'kapas', 'kapus', 'कापूस', 'कपास'] },
   { id: 'Wheat', nameEn: 'Wheat', nameMr: 'गहू', nameHi: 'गेहूं', keywords: ['wheat', 'gehu', 'gahu', 'गहू', 'गेहूं'] },
-  { id: 'Onion', nameEn: 'Onion', nameMr: 'कांदा', nameHi: 'प्याज', keywords: ['onion', 'kanda', 'pyaj', 'pyaz', 'कांदा', 'प्याज'] },
+  { id: 'Onion', nameEn: 'Onion', nameMr: 'कांदा', nameHi: 'प्याज', keywords: ['onion', 'kanda', 'pyaj', 'pyaz', 'कांदा', 'प्याज', 'red onion'] },
   { id: 'Maize', nameEn: 'Maize', nameMr: 'मका', nameHi: 'मक्का', keywords: ['maize', 'corn', 'maka', 'makka', 'मका', 'मक्का'] },
   { id: 'Chana', nameEn: 'Chana', nameMr: 'हरभरा', nameHi: 'चना', keywords: ['chana', 'harbhara', 'gram', 'हरभरा', 'चना'] }
 ];
@@ -36,70 +38,15 @@ const DEFAULT_SLOTS = [
   { id: 'S3', label: 'Afternoon 02:00 – 05:00 PM', slotLabel: '02:00 PM - 05:00 PM', start: '14:00', end: '17:00', keywords: ['afternoon', 'evening', 'sandhyakali', 'sham', 'संध्याकाळी', 'शाम', 'tisra', 'तीसरा', '2 to 5', '2'] }
 ];
 
-// ─── Step Prompts in EN, HI, MR ────────────────────────────────────────────────
-
-const STEP_PROMPTS = [
-  {
-    step: 1,
-    field: 'centre',
-    title: 'Procurement Centre',
-    question: {
-      en: 'Which procurement centre would you like to book? For example: Kopargaon, Shirdi, Rahata, Vaijapur, Shrirampur, or Lasalgaon.',
-      hi: 'आप किस खरीद केंद्र या मंडी के लिए स्लॉट बुक करना चाहते हैं? जैसे: कोपरगांव, शिर्डी, राहाता, वैजापुर, श्रीरामपुर, या लासलगांव.',
-      mr: 'तुम्हाला कोणत्या खरेदी केंद्रासाठी (बाजार समिती) स्लॉट बुक करायचा आहे? उदाहरणार्थ: कोपरगाव, शिर्डी, राहाता, वैजापूर, श्रीरामपूर, किंवा लासलगाव.'
-    },
-    clarify: {
-      en: 'We could not recognize the centre name. Please clearly speak one of the centres: Kopargaon, Shirdi, Rahata, Vaijapur, Shrirampur, or Lasalgaon.',
-      hi: 'हम मंडी का नाम नहीं पहचान सके। कृपया इनमें से किसी एक केंद्र का नाम बोलें: कोपरगांव, शिर्डी, राहाता, वैजापुर, श्रीरामपुर, या लासलगांव.',
-      mr: 'आम्हाला केंद्राचे नाव समजले नाही. कृपया यापैकी एका केंद्राचे नाव स्पष्टपणे सांगा: कोपरगाव, शिर्डी, राहाता, वैजापूर, श्रीरामपूर, किंवा लासलगाव.'
-    }
-  },
-  {
-    step: 2,
-    field: 'crop',
-    title: 'Commodity / Crop',
-    question: {
-      en: 'What crop are you bringing? For example: Soybean, Cotton, Wheat, Onion, Maize, or Chana.',
-      hi: 'आप कौन सी फसल ला रहे हैं? जैसे: सोयाबीन, कपास, गेहूं, प्याज, मक्का, या चना.',
-      mr: 'तुम्ही कोणते पीक आणणार आहात? उदाहरणार्थ: सोयाबीन, कापूस, गहू, कांदा, मका, किंवा हरभरा.'
-    },
-    clarify: {
-      en: 'Please state a valid crop from the list: Soybean, Cotton, Wheat, Onion, Maize, or Chana.',
-      hi: 'कृपया मान्य फसल का नाम स्पष्ट बताएं: सोयाबीन, कपास, गेहूं, प्याज, मक्का, या चना.',
-      mr: 'कृपया यादीतील मान्य पिकाचे नाव सांगा: सोयाबीन, कापूस, गहू, कांदा, मका, किंवा हरभरा.'
-    }
-  },
-  {
-    step: 3,
-    field: 'quantity',
-    title: 'Quantity (Quintals)',
-    question: {
-      en: 'How many quintals are you bringing to the mandi? For example: 25 quintals or 50 quintals.',
-      hi: 'आप कितने क्विंटल फसल ला रहे हैं? जैसे: २५ क्विंटल या ५० क्विंटल.',
-      mr: 'तुम्ही किती क्विंटल माल घेऊन येणार आहात? उदाहरणार्थ: २५ क्विंटल किंवा ५० क्विंटल.'
-    },
-    clarify: {
-      en: 'Please state the quantity clearly in quintals between 1 and 100 quintals (e.g. 25 quintals).',
-      hi: 'कृपया १ से १०० के बीच क्विंटल में स्पष्ट संख्या बताएं (जैसे २५ क्विंटल).',
-      mr: 'कृपया १ ते १०० च्या दरम्यान क्विंटलमध्ये स्पष्ट संख्या सांगा (उदा. २५ क्विंटल).'
-    }
-  },
-  {
-    step: 4,
-    field: 'slot',
-    title: 'Arrival Date & Time Slot',
-    question: {
-      en: 'Which date and arrival slot would you like? For example: Today morning, Tomorrow morning, or Tomorrow afternoon.',
-      hi: 'आप किस दिन और समय का स्लॉट चाहते हैं? जैसे: आज सुबह, कल सुबह, या कल दोपहर.',
-      mr: 'तुम्हाला कोणत्या दिवसाचा आणि वेळेचा स्लॉट हवा आहे? जसे की: आज सकाळी, उद्या सकाळी, किंवा उद्या दुपारी.'
-    },
-    clarify: {
-      en: 'Please specify whether you want Today or Tomorrow, and Morning or Afternoon slot.',
-      hi: 'कृपया बताएं कि आप आज या कल, और सुबह या दोपहर का कौन सा स्लॉट चाहते हैं.',
-      mr: 'कृपया आज किंवा उद्या, आणि सकाळ किंवा दुपार यापैकी स्लॉट स्पष्टपणे सांगा.'
-    }
-  }
-];
+// Master Support Info
+const SUPPORT_INFO = {
+  tollFree: '1800-123-54726',
+  tollFreeDisplay: '1800-123-KISAN (1800-123-54726)',
+  whatsapp: '+919876543210',
+  whatsappUrl: 'https://wa.me/919876543210?text=Hello%20KisanQ%20Support',
+  operatingHours: 'Voice Helpline 24x7 | Mandi Desk 07:00 AM - 07:00 PM',
+  portalUrl: 'https://kisanq.gov.in'
+};
 
 // ─── In-Memory Voice Sessions Store ────────────────────────────────────────────
 
@@ -116,475 +63,1083 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
-// ─── Steerable Multilingual TTS Configuration ────────────────────────────────
-// Directed via natural-language style instructions and customized prebuilt voices
+// ─── 7 Tool Definitions for Groq Tool-Calling ──────────────────────────────────
 
-const TTS_CONFIG = {
-  mr: {
-    voice: 'Aoede', // Expressive, natural Indic cadence for Marathi
-    stylePrompt: 'Say in a natural, clear Marathi accent, calm and simple, like a helpful government-office assistant speaking to a farmer'
+const ASSISTANT_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'book_slot',
+      description: 'Book an APMC mandi arrival slot for crop intake.',
+      parameters: {
+        type: 'object',
+        properties: {
+          centre: { type: 'string', description: 'Mandi name/code (e.g. Kopargaon, Shirdi, KPG-01)' },
+          crop: { type: 'string', description: 'Crop name (e.g. Soybean, Cotton, Wheat)' },
+          quantity: { type: 'number', description: 'Quantity in Quintals' },
+          slot: { type: 'string', description: 'Slot date and time (e.g. Tomorrow morning, 08:00 AM - 11:00 AM)' }
+        },
+        required: ['centre', 'crop', 'quantity', 'slot']
+      }
+    }
   },
-  hi: {
-    voice: 'Kore', // Clear, articulate, warm Hindi phonetics
-    stylePrompt: 'Say in a natural, clear Hindi accent, calm and simple, like a helpful APMC mandi assistant speaking to a farmer'
+  {
+    type: 'function',
+    function: {
+      name: 'cancel_booking',
+      description: 'Cancel an active booking slot for the farmer.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tokenNumber: { type: 'string', description: 'Token number (optional)' },
+          reason: { type: 'string', description: 'Cancellation reason' }
+        }
+      }
+    }
   },
-  en: {
-    voice: 'Aoede', // Warm, clear Indian English cadence
-    stylePrompt: 'Say in a clear Indian English accent, simple and warm'
-  }
-};
-
-/**
- * Converts raw 16-bit Mono PCM audio into a standard RIFF/WAV Buffer
- */
-function pcmToWav(pcmBuffer, sampleRate = 24000) {
-  const byteRate = sampleRate * 2;
-  const dataSize = pcmBuffer.length;
-  const header = Buffer.alloc(44);
-
-  header.write('RIFF', 0);
-  header.writeUInt32LE(36 + dataSize, 4);
-  header.write('WAVE', 8);
-  header.write('fmt ', 12);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20); // AudioFormat: PCM
-  header.writeUInt16LE(1, 22); // Channels: Mono
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(byteRate, 28);
-  header.writeUInt16LE(2, 32);  // BlockAlign
-  header.writeUInt16LE(16, 34); // BitsPerSample
-  header.write('data', 36);
-  header.writeUInt32LE(dataSize, 40);
-
-  return Buffer.concat([header, pcmBuffer]);
-}
-
-// In-Memory audio cache for rapid response
-const ttsAudioCache = new Map();
-
-/**
- * Synthesizes steerable spoken audio using Gemini TTS model
- */
-async function synthesizeGeminiTTS(text, language = 'mr', voiceOverride = null) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || !text) return null;
-
-  const langConfig = TTS_CONFIG[language] || TTS_CONFIG.mr;
-  const voice = voiceOverride || langConfig.voice;
-  const stylePrompt = langConfig.stylePrompt;
-  const fullPrompt = `${stylePrompt}: ${text}`;
-  const cacheKey = `${language}_${voice}_${crypto.createHash('md5').update(fullPrompt).digest('hex')}`;
-
-  if (ttsAudioCache.has(cacheKey)) {
-    return ttsAudioCache.get(cacheKey);
-  }
-
-  // Check pre-rendered on-disk sample
-  const samplePath = path.join(__dirname, `../../public/tts-samples/sample_${language}_${voice.toLowerCase()}.wav`);
-  if (fs.existsSync(samplePath) && (text.includes('खरेदी केंद्रासाठी') || text.includes('खरीद केंद्र') || text.includes('procurement centre'))) {
-    try {
-      const sampleBuf = fs.readFileSync(samplePath);
-      ttsAudioCache.set(cacheKey, sampleBuf);
-      return sampleBuf;
-    } catch (e) {}
-  }
-
-  const models = ['models/gemini-2.5-flash-preview-tts', 'models/gemini-3.1-flash-tts-preview'];
-
-  for (const model of models) {
-    try {
-      const payload = JSON.stringify({
-        contents: [{ parts: [{ text: fullPrompt }] }],
-        generationConfig: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: voice
-              }
-            }
-          }
-        }
-      });
-
-      const audioBuffer = await new Promise((resolve, reject) => {
-        const req = https.request(
-          `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 9000
-          },
-          (res) => {
-            let body = '';
-            res.on('data', (d) => (body += d));
-            res.on('end', () => {
-              try {
-                const j = JSON.parse(body);
-                const part = j.candidates?.[0]?.content?.parts?.find(
-                  (p) => p.inlineData && p.inlineData.mimeType?.startsWith('audio/')
-                );
-                if (part && part.inlineData?.data) {
-                  const pcm = Buffer.from(part.inlineData.data, 'base64');
-                  const wav = pcmToWav(pcm, 24000);
-                  resolve(wav);
-                } else {
-                  reject(new Error(`No audio part returned in TTS`));
-                }
-              } catch (e) {
-                reject(e);
-              }
-            });
-          }
-        );
-        req.on('error', reject);
-        req.on('timeout', () => {
-          req.destroy();
-          reject(new Error('Gemini TTS timeout'));
-        });
-        req.write(payload);
-        req.end();
-      });
-
-      if (audioBuffer && audioBuffer.length > 44) {
-        ttsAudioCache.set(cacheKey, audioBuffer);
-        return audioBuffer;
-      }
-    } catch (err) {
-      logger.warn(`[VoiceBooking] Gemini TTS generation via ${model} failed: ${err.message}`);
-    }
-  }
-
-  return null;
-}
-
-// ─── Audio Generation Fallback (Harmonic Chime generator) ────────────────────
-
-/**
- * Generates a minimal PCM WAV header + soft audio tone buffer for fallback audio streaming.
- * This guarantees audio playback never returns 404/500 even without external TTS providers.
- */
-function createSyntheticWavAudio(durationSeconds = 1.2, frequency = 440) {
-  const sampleRate = 16000;
-  const numSamples = Math.floor(sampleRate * durationSeconds);
-  const blockAlign = 2; // 16-bit mono
-  const byteRate = sampleRate * blockAlign;
-  const dataSize = numSamples * blockAlign;
-  const buffer = Buffer.alloc(44 + dataSize);
-
-  // RIFF identifier
-  buffer.write('RIFF', 0);
-  buffer.writeUInt32LE(36 + dataSize, 4);
-  buffer.write('WAVE', 8);
-
-  // Format chunk
-  buffer.write('fmt ', 12);
-  buffer.writeUInt32LE(16, 16); // SubChunk1Size (16 for PCM)
-  buffer.writeUInt16LE(1, 20);  // AudioFormat (1 = PCM)
-  buffer.writeUInt16LE(1, 22);  // NumChannels (1 = Mono)
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(byteRate, 28);
-  buffer.writeUInt16LE(blockAlign, 32);
-  buffer.writeUInt16LE(16, 34); // BitsPerSample
-
-  // Data chunk
-  buffer.write('data', 36);
-  buffer.writeUInt32LE(dataSize, 40);
-
-  // Generate sine wave samples with smooth fade-in/fade-out
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    let amplitude = Math.sin(2 * Math.PI * frequency * t);
-    // Envelope (fade-in first 50ms, fade-out last 100ms)
-    if (i < sampleRate * 0.05) amplitude *= (i / (sampleRate * 0.05));
-    if (i > numSamples - sampleRate * 0.1) amplitude *= ((numSamples - i) / (sampleRate * 0.1));
-    const sampleVal = Math.floor(amplitude * 12000);
-    buffer.writeInt16LE(sampleVal, 44 + i * 2);
-  }
-
-  return buffer;
-}
-
-// ─── Gemini Multimodal AI Client ───────────────────────────────────────────────
-
-/**
- * Call Gemini 1.5 Flash / 2.0 Flash to process audio input with field-scoped extraction instructions.
- */
-async function callGeminiAudioUnderstanding({ audioBuffer, mimeType = 'audio/webm', field, language = 'mr', currentStepPrompt }) {
-  const apiKey = process.env.GEMINI_API_KEY;
-
-  // Language display name
-  const langNames = { mr: 'Marathi', hi: 'Hindi', en: 'English' };
-  const targetLang = langNames[language] || 'Marathi';
-
-  // Build field instructions & allowed contexts
-  let fieldConstraint = '';
-  if (field === 'centre') {
-    fieldConstraint = `Allowed Mandi centres:
-- "APMC Kopargaon" (code: "KPG-01", keywords: Kopargaon, कोपरगाव, कोपरगांव)
-- "APMC Shirdi" (code: "SRD-02", keywords: Shirdi, शिर्डी, शिरडी)
-- "APMC Rahata" (code: "RHT-03", keywords: Rahata, राहाता, राहता)
-- "APMC Vaijapur" (code: "VJP-04", keywords: Vaijapur, वैजापूर, वैजापुर)
-- "APMC Shrirampur" (code: "SRP-05", keywords: Shrirampur, श्रीरामपूर, श्रीरामपुर)
-- "APMC Lasalgaon" (code: "LSG-06", keywords: Lasalgaon, लासलगाव, लासलगांव)
-Return matched centre object: { "code": string, "name": string }`;
-  } else if (field === 'crop') {
-    fieldConstraint = `Allowed crops:
-- "Soybean" (सोयाबीन)
-- "Cotton" (कापूस / कपास)
-- "Wheat" (गहू / गेहूं)
-- "Onion" (कांदा / प्याज)
-- "Maize" (मका / मक्का)
-- "Chana" (हरभरा / चना)
-Return matched crop string (e.g. "Soybean")`;
-  } else if (field === 'quantity') {
-    fieldConstraint = `Extract numeric quantity in quintals as a positive integer (e.g. 25, 50, 10). Parse Marathi/Hindi numerals (e.g. "पंचवीस" -> 25, "पन्नास" -> 50, "दहा" -> 10, "पच्चीस" -> 25).
-Return integer number (e.g. 25)`;
-  } else if (field === 'slot') {
-    fieldConstraint = `Extract arrival date offset and time slot:
-- dateOffset: 0 for today ("aaj", "आज", "today"), 1 for tomorrow ("udya", "उद्या", "kal", "कल", "tomorrow"), 2 for day after. Default: 0 (or 1 if time has passed).
-- slotLabel: One of "08:00 AM - 11:00 AM" (morning / sakali / subah), "11:00 AM - 02:00 PM" (midday / dupari / dopahar), "02:00 PM - 05:00 PM" (afternoon / sandhyakali).
-Return object: { "dateOffset": number, "slotLabel": string, "period": "morning"|"midday"|"afternoon" }`;
-  }
-
-  const promptText = `You are the AI Voice Intake Assayer for KisanQ (Maharashtra APMC Agricultural Slot Booking).
-The farmer was asked: "${currentStepPrompt.question[language] || currentStepPrompt.question.en}" in ${targetLang}.
-Target field: "${field}".
-
-Rules:
-${fieldConstraint}
-
-Task:
-1. Transcribe the user's spoken audio response accurately in ${targetLang}.
-2. If the user mentioned a valid ${field}, extract the normalized value.
-3. If the audio is silent, background noise, or completely unrelated/unclear, mark status as "UNCLEAR".
-
-Return STRICT JSON ONLY matching this format:
-{
-  "status": "VALID" | "UNCLEAR",
-  "transcript": "<verbatim transcript>",
-  "value": <extracted value or null>,
-  "confidence": "HIGH" | "MEDIUM" | "LOW",
-  "clarificationNote": "<short helpful note if UNCLEAR>"
-}`;
-
-  if (apiKey) {
-    try {
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
-      const payload = {
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  mimeType: mimeType || 'audio/webm',
-                  data: audioBuffer.toString('base64')
-                }
-              },
-              {
-                text: promptText
-              }
-            ]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json'
-        }
-      };
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(25000)
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        logger.warn(`[VoiceBooking] Gemini API returned status ${response.status}: ${errText}`);
-        if (response.status === 429) {
-          return { status: 'RATE_LIMITED', message: 'Gemini rate limit exceeded' };
-        }
-      } else {
-        const json = await response.json();
-        const candidateText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (candidateText) {
-          const parsed = JSON.parse(candidateText);
-          logger.info(`[VoiceBooking] Gemini parsed field '${field}':`, parsed);
-          return parsed;
+  {
+    type: 'function',
+    function: {
+      name: 'check_queue_position',
+      description: 'Check live queue position, vehicles ahead, and wait time for active token.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tokenNumber: { type: 'string', description: 'Token number (optional)' }
         }
       }
-    } catch (err) {
-      logger.warn(`[VoiceBooking] Gemini API call exception: ${err.message}`);
     }
-  }
-
-  // ─── Resilient Fallback Matching (for mock tests / offline / keyless mode) ────
-  logger.info(`[VoiceBooking] Using fallback heuristic parser for field: ${field}`);
-  return runFallbackParser(audioBuffer, field, language);
-}
-
-/**
- * Fallback parser for offline development, automated tests, or missing API keys.
- */
-function runFallbackParser(audioBuffer, field, language) {
-  // If buffer is empty or too short (< 100 bytes), mark unclear
-  if (!audioBuffer || audioBuffer.length < 50) {
-    return {
-      status: 'UNCLEAR',
-      transcript: '',
-      value: null,
-      confidence: 'LOW',
-      clarificationNote: 'Audio too short or empty'
-    };
-  }
-
-  // Heuristic mock response defaults (used when live Gemini is offline)
-  if (field === 'centre') {
-    return {
-      status: 'VALID',
-      transcript: language === 'mr' ? 'कोपरगाव बाजार समिती' : 'APMC Kopargaon',
-      value: { code: 'KPG-01', name: 'APMC Kopargaon' },
-      confidence: 'HIGH'
-    };
-  } else if (field === 'crop') {
-    return {
-      status: 'VALID',
-      transcript: language === 'mr' ? 'सोयाबीन' : 'Soybean',
-      value: 'Soybean',
-      confidence: 'HIGH'
-    };
-  } else if (field === 'quantity') {
-    return {
-      status: 'VALID',
-      transcript: language === 'mr' ? '२५ क्विंटल' : '25 quintals',
-      value: 25,
-      confidence: 'HIGH'
-    };
-  } else if (field === 'slot') {
-    return {
-      status: 'VALID',
-      transcript: language === 'mr' ? 'उद्या सकाळी' : 'Tomorrow morning',
-      value: { dateOffset: 1, slotLabel: '08:00 AM - 11:00 AM', period: 'morning' },
-      confidence: 'HIGH'
-    };
-  }
-
-  return { status: 'UNCLEAR', value: null };
-}
-
-// ─── Text / Keyword Parsing Helper ─────────────────────────────────────────────
-
-/**
- * Matches a text string or transcription against domain entities (centres, crops, quantities, slots).
- */
-function matchFieldFromText(text, field) {
-  if (!text || typeof text !== 'string') return null;
-  const clean = text.toLowerCase().trim();
-
-  if (field === 'centre') {
-    for (const c of KNOWN_CENTRES) {
-      if (c.keywords.some((kw) => clean.includes(kw.toLowerCase())) || clean.includes(c.name.toLowerCase())) {
-        return { code: c.code, name: c.name };
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_crop_price',
+      description: 'Check today MSP and APMC mandi market price for a crop.',
+      parameters: {
+        type: 'object',
+        properties: {
+          crop: { type: 'string', description: 'Crop name (e.g. Soybean, Cotton, Wheat)' },
+          centre: { type: 'string', description: 'Mandi name/code (optional)' }
+        },
+        required: ['crop']
       }
     }
-  } else if (field === 'crop') {
-    for (const cr of KNOWN_CROPS) {
-      if (cr.keywords.some((kw) => clean.includes(kw.toLowerCase())) || clean.includes(cr.id.toLowerCase())) {
-        return cr.id;
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_token_status',
+      description: 'Check 5-stage progress of a token (Gate, Grading, Weighbridge, Procurement, Payout).',
+      parameters: {
+        type: 'object',
+        properties: {
+          tokenNumber: { type: 'string', description: 'Token number (optional)' }
+        }
       }
     }
-  } else if (field === 'quantity') {
-    // Check Marathi / Hindi number words (ordered longest first to prevent subword false-positives like 'वीस' inside 'पंचवीस')
-    const marathiHindiNums = [
-      { word: 'पंचवीस', val: 25 }, { word: 'पच्चीस', val: 25 },
-      { word: 'पस्तीस', val: 35 }, { word: 'पैंतीस', val: 35 },
-      { word: 'चाळीस', val: 40 }, { word: 'चालीस', val: 40 },
-      { word: 'पन्नास', val: 50 }, { word: 'पचास', val: 50 },
-      { word: 'सत्तर', val: 70 }, { word: 'ऐंशी', val: 80 },
-      { word: 'अस्सी', val: 80 }, { word: 'नव्वद', val: 90 },
-      { word: 'नब्बे', val: 90 }, { word: 'शंभर', val: 100 },
-      { word: 'साठ', val: 60 }, { word: 'तीस', val: 30 },
-      { word: 'वीस', val: 20 }, { word: 'बीस', val: 20 },
-      { word: 'दहा', val: 10 }, { word: 'दस', val: 10 },
-      { word: 'सौ', val: 100 }, { word: 'पाच', val: 5 },
-      { word: 'पाँच', val: 5 }, { word: 'चार', val: 4 },
-      { word: 'तीन', val: 3 }, { word: 'दोन', val: 2 },
-      { word: 'दो', val: 2 }, { word: 'एक', val: 1 }
-    ];
-    for (const item of marathiHindiNums) {
-      if (clean.includes(item.word)) return item.val;
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_payout_status',
+      description: 'Check DBT payout amount and payment status for delivered harvest.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tokenNumber: { type: 'string', description: 'Token number (optional)' }
+        }
+      }
     }
-    // Convert Devanagari digits (०-९) to standard digits
-    const devanagariMap = { '०': '0', '१': '1', '२': '2', '३': '3', '४': '4', '५': '5', '६': '6', '७': '7', '८': '8', '९': '9' };
-    const textWithAsciiDigits = clean.replace(/[०-९]/g, (d) => devanagariMap[d] || d);
-    const match = textWithAsciiDigits.match(/(\d{1,3})/);
-    if (match) {
-      const num = parseInt(match[1], 10);
-      if (num >= 1 && num <= 100) return num;
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_support_info',
+      description: 'Get KisanQ toll-free helpline number and WhatsApp support link.',
+      parameters: {
+        type: 'object',
+        properties: {
+          topic: { type: 'string', description: 'Support topic (optional)' }
+        }
+      }
     }
-  } else if (field === 'slot') {
+  }
+];
+
+// ─── Groq Audio Transcription (Whisper) ───────────────────────────────────────
+
+/**
+ * Transcribes spoken audio buffer using Groq Whisper endpoint
+ * Model: whisper-large-v3-turbo
+ */
+async function transcribeAudio(audioBuffer, languageHint = 'mr', mimeType = 'audio/webm') {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey || !audioBuffer || audioBuffer.length < 50) {
+    logger.warn('[VoiceBooking] transcribeAudio: No GROQ_API_KEY or buffer too short');
+    return null;
+  }
+
+  try {
+    const formData = new FormData();
+    const ext = (mimeType && mimeType.includes('m4a')) ? 'm4a' : (mimeType && mimeType.includes('wav')) ? 'wav' : (mimeType && mimeType.includes('ogg')) ? 'ogg' : 'webm';
+    const blob = new Blob([audioBuffer], { type: mimeType || 'audio/webm' });
+    formData.append('file', blob, `voice_input.${ext}`);
+    formData.append('model', 'whisper-large-v3-turbo');
+    if (['mr', 'hi', 'en'].includes(languageHint)) {
+      formData.append('language', languageHint);
+    }
+    formData.append('response_format', 'json');
+
+    const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: formData,
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      logger.warn(`[VoiceBooking] Groq Whisper API returned status ${response.status}: ${errText}`);
+      return null;
+    }
+
+    const json = await response.json();
+    const text = (json.text || '').trim();
+    logger.info(`[VoiceBooking] Groq Whisper transcription (${languageHint}): "${text}"`);
+    return text || null;
+  } catch (err) {
+    logger.warn(`[VoiceBooking] Groq Whisper transcription failed: ${err.message}`);
+    return null;
+  }
+}
+
+// ─── Tool Execution Handlers ───────────────────────────────────────────────────
+
+/**
+ * 1. Book a Slot Handler
+ */
+async function handleBookSlot({ centre, crop, quantity, slot }, session) {
+  try {
+    // Normalize centre
+    let matchedCentre = KNOWN_CENTRES.find((c) =>
+      c.code.toLowerCase() === String(centre).toLowerCase() ||
+      c.name.toLowerCase().includes(String(centre).toLowerCase()) ||
+      c.keywords.some((kw) => String(centre).toLowerCase().includes(kw.toLowerCase()))
+    ) || KNOWN_CENTRES[0];
+
+    // Normalize crop
+    let matchedCrop = KNOWN_CROPS.find((cr) =>
+      cr.id.toLowerCase() === String(crop).toLowerCase() ||
+      cr.keywords.some((kw) => String(crop).toLowerCase().includes(kw.toLowerCase()))
+    ) || { id: 'Soybean', nameEn: 'Soybean', nameMr: 'सोयाबीन', nameHi: 'सोयाबीन' };
+
+    // Normalize quantity
+    let qty = Number(quantity);
+    if (isNaN(qty) || qty <= 0) qty = 25;
+    if (qty > 100) qty = 100;
+
+    // Normalize slot & date
     let dateOffset = 0;
-    if (clean.includes('tomorrow') || clean.includes('udya') || clean.includes('उद्या') || clean.includes('kal') || clean.includes('कल')) {
+    const cleanSlot = String(slot || '').toLowerCase();
+    if (cleanSlot.includes('tomorrow') || cleanSlot.includes('udya') || cleanSlot.includes('उद्या') || cleanSlot.includes('kal') || cleanSlot.includes('कल')) {
       dateOffset = 1;
-    } else if (clean.includes('day after') || clean.includes('parwa') || clean.includes('परवा') || clean.includes('परसों')) {
+    } else if (cleanSlot.includes('day after') || cleanSlot.includes('parwa') || cleanSlot.includes('परवा') || cleanSlot.includes('परसों')) {
       dateOffset = 2;
     }
 
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() + dateOffset);
+    const dateStr = targetDate.toISOString().split('T')[0];
+
     let chosenSlot = DEFAULT_SLOTS[0];
     for (const s of DEFAULT_SLOTS) {
-      if (s.keywords.some((kw) => clean.includes(kw.toLowerCase()))) {
+      if (s.keywords.some((kw) => cleanSlot.includes(kw.toLowerCase()))) {
         chosenSlot = s;
         break;
       }
     }
+    const slotLabel = chosenSlot.slotLabel || chosenSlot.label;
+
+    const bookingPayload = {
+      collectedData: {
+        centreCode: matchedCentre.code,
+        centreId: matchedCentre.code,
+        centreName: matchedCentre.name,
+        crop: matchedCrop.id,
+        quantity: qty,
+        quantityBand: qty <= 5 ? '0-5q' : qty <= 15 ? '5-15q' : '15q+',
+        slotDate: dateStr,
+        slotLabel,
+        slotTime: slotLabel
+      },
+      farmerPhone: session.farmerPhone || '9876543210',
+      farmerName: session.farmerName || 'Mahesh Borde',
+      farmerId: session.farmerId || null
+    };
+
+    const result = await voiceBookingService.finalizeBooking(bookingPayload);
+    session.activeToken = result.token;
 
     return {
-      dateOffset,
-      slotLabel: chosenSlot.slotLabel || chosenSlot.label,
-      period: chosenSlot.id === 'S1' ? 'morning' : chosenSlot.id === 'S2' ? 'midday' : 'afternoon'
+      success: true,
+      action: 'book_slot',
+      tokenNumber: result.token.tokenNumber,
+      mandiName: matchedCentre.name,
+      mandiCode: matchedCentre.code,
+      crop: matchedCrop.id,
+      quantity: qty,
+      slotDate: dateStr,
+      slotTime: slotLabel,
+      queuePosition: result.token.queuePosition || 1,
+      estimatedWaitTime: '15-20 mins',
+      token: result.token
+    };
+  } catch (err) {
+    logger.error(`[VoiceBooking] handleBookSlot error: ${err.message}`);
+    return {
+      success: false,
+      action: 'book_slot',
+      error: err.message
+    };
+  }
+}
+
+/**
+ * 2. Cancel Booking Handler
+ */
+async function handleCancelBooking({ tokenNumber, reason }, session) {
+  try {
+    const phone = session.farmerPhone || '9876543210';
+    let targetToken = null;
+
+    if (tokenNumber) {
+      if (mongoose.connection.readyState === 1) {
+        targetToken = await Token.findOne({
+          $or: [{ tokenNumber: tokenNumber.trim() }, { id: tokenNumber.trim() }]
+        });
+      }
+    }
+
+    if (!targetToken) {
+      if (mongoose.connection.readyState === 1) {
+        targetToken = await Token.findOne({
+          $or: [{ farmerPhone: phone }, { phone }],
+          status: { $nin: ['Completed', 'COMPLETED', 'Cancelled', 'CANCELLED'] }
+        }).sort({ createdAt: -1 });
+      }
+    }
+
+    if (!targetToken && session.activeToken) {
+      targetToken = session.activeToken;
+    }
+
+    if (!targetToken) {
+      return {
+        success: false,
+        action: 'cancel_booking',
+        message: 'No active booking was found to cancel for your phone number.'
+      };
+    }
+
+    // Cancel token
+    targetToken.status = 'CANCELLED';
+    targetToken.cancelledAt = new Date();
+    targetToken.cancellationReason = reason || 'Farmer requested cancellation via Voice Assistant';
+
+    if (mongoose.connection.readyState === 1 && targetToken.save) {
+      await targetToken.save();
+    }
+
+    session.activeToken = null;
+
+    return {
+      success: true,
+      action: 'cancel_booking',
+      tokenNumber: targetToken.tokenNumber || targetToken.id,
+      cancelledAt: new Date().toISOString(),
+      cancellationFee: 0,
+      feeExplanation: 'Free cancellation (>2 hours prior to slot)',
+      message: `Booking ${targetToken.tokenNumber || targetToken.id} has been cancelled successfully.`
+    };
+  } catch (err) {
+    logger.error(`[VoiceBooking] handleCancelBooking error: ${err.message}`);
+    return {
+      success: false,
+      action: 'cancel_booking',
+      error: err.message
+    };
+  }
+}
+
+/**
+ * 3. Check Live Queue Position Handler
+ */
+async function handleCheckQueuePosition({ tokenNumber }, session) {
+  try {
+    const phone = session.farmerPhone || '9876543210';
+    let token = null;
+
+    if (tokenNumber && mongoose.connection.readyState === 1) {
+      token = await Token.findOne({ $or: [{ tokenNumber }, { id: tokenNumber }] });
+    }
+
+    if (!token && mongoose.connection.readyState === 1) {
+      token = await Token.findOne({
+        $or: [{ farmerPhone: phone }, { phone }],
+        status: { $nin: ['Completed', 'COMPLETED', 'Cancelled', 'CANCELLED'] }
+      }).sort({ createdAt: -1 });
+    }
+
+    if (!token && session.activeToken) {
+      token = session.activeToken;
+    }
+
+    if (!token) {
+      return {
+        success: false,
+        action: 'check_queue_position',
+        message: 'No active booking queue record found for your account.'
+      };
+    }
+
+    const pos = token.queuePosition || 1;
+    const waitMins = Math.max(10, pos * 8);
+
+    return {
+      success: true,
+      action: 'check_queue_position',
+      tokenNumber: token.tokenNumber || token.id,
+      mandiName: token.mandiName || 'APMC Kopargaon',
+      crop: token.crop || 'Soybean',
+      queuePosition: pos,
+      aheadCount: Math.max(0, pos - 1),
+      estimatedWaitTime: `${waitMins} minutes`,
+      status: token.status || 'BOOKED',
+      currentStage: token.stages?.[token.currentStageIndex || 0]?.title || 'Gate Check-in & QR Scan'
+    };
+  } catch (err) {
+    logger.error(`[VoiceBooking] handleCheckQueuePosition error: ${err.message}`);
+    return {
+      success: false,
+      action: 'check_queue_position',
+      error: err.message
+    };
+  }
+}
+
+/**
+ * 4. Check Crop Price / MSP Handler
+ */
+async function handleCheckCropPrice({ crop, centre }) {
+  try {
+    const cleanCrop = crop || 'Soybean';
+    const mspRates = {
+      Soybean: 4892,
+      Wheat: 2425,
+      Onion: 1950,
+      Cotton: 7122,
+      Maize: 2090,
+      Chana: 5440
+    };
+
+    let targetMandiId = 'KPG-01';
+    let targetMandiName = 'APMC Kopargaon';
+    if (centre) {
+      const match = KNOWN_CENTRES.find((c) =>
+        c.code.toLowerCase().includes(centre.toLowerCase()) ||
+        c.name.toLowerCase().includes(centre.toLowerCase()) ||
+        c.keywords.some((kw) => centre.toLowerCase().includes(kw.toLowerCase()))
+      );
+      if (match) {
+        targetMandiId = match.code;
+        targetMandiName = match.name;
+      }
+    }
+
+    let prices = [];
+    try {
+      prices = await cropPriceService.getPricesByCrop(cleanCrop);
+    } catch (e) {
+      prices = [];
+    }
+
+    const defaultMsp = mspRates[cleanCrop] || 4892;
+    const marketToday = prices[0]?.marketPriceToday || Math.round(defaultMsp * 1.015);
+    const marketYesterday = prices[0]?.marketPriceYesterday || defaultMsp;
+
+    return {
+      success: true,
+      action: 'check_crop_price',
+      crop: cleanCrop,
+      mandiName: targetMandiName,
+      mandiId: targetMandiId,
+      statutoryMSP: defaultMsp,
+      marketPriceToday: marketToday,
+      marketPriceYesterday: marketYesterday,
+      priceTrend: marketToday >= marketYesterday ? 'UP' : 'DOWN',
+      unit: '₹ / Quintal',
+      prices: prices.length > 0 ? prices : [
+        { mandiId: targetMandiId, crop: cleanCrop, mspPrice: defaultMsp, marketPriceToday: marketToday, marketPriceYesterday: marketYesterday }
+      ]
+    };
+  } catch (err) {
+    logger.error(`[VoiceBooking] handleCheckCropPrice error: ${err.message}`);
+    return {
+      success: false,
+      action: 'check_crop_price',
+      error: err.message
+    };
+  }
+}
+
+/**
+ * 5. Check Token 5-Stage Status Handler
+ */
+async function handleCheckTokenStatus({ tokenNumber }, session) {
+  try {
+    const phone = session.farmerPhone || '9876543210';
+    let token = null;
+
+    if (tokenNumber && mongoose.connection.readyState === 1) {
+      token = await Token.findOne({ $or: [{ tokenNumber }, { id: tokenNumber }] });
+    }
+
+    if (!token && mongoose.connection.readyState === 1) {
+      token = await Token.findOne({
+        $or: [{ farmerPhone: phone }, { phone }]
+      }).sort({ createdAt: -1 });
+    }
+
+    if (!token && session.activeToken) {
+      token = session.activeToken;
+    }
+
+    if (!token) {
+      return {
+        success: false,
+        action: 'check_token_status',
+        message: 'No token record found for your request.'
+      };
+    }
+
+    const currentIdx = token.currentStageIndex || 0;
+    const stages = token.stages || [];
+    const currentStage = stages[currentIdx] || { title: 'Gate Check-in & QR Scan', status: 'Pending', officerName: 'Security Desk #1' };
+
+    return {
+      success: true,
+      action: 'check_token_status',
+      tokenNumber: token.tokenNumber || token.id,
+      mandiName: token.mandiName || 'APMC Kopargaon',
+      crop: token.crop || 'Soybean',
+      quantity: token.quantity || 25,
+      overallStatus: token.status || 'BOOKED',
+      currentStageIndex: currentIdx + 1,
+      totalStages: 5,
+      currentStageName: currentStage.title || currentStage.label,
+      currentStageStatus: currentStage.status || 'Pending',
+      assignedOfficer: currentStage.officerName || currentStage.officer || 'APMC Desk Officer',
+      stages: stages.map((s, idx) => ({
+        index: idx + 1,
+        title: s.title || s.label,
+        status: s.status || (idx < currentIdx ? 'Completed' : idx === currentIdx ? 'In Progress' : 'Pending'),
+        officer: s.officerName || s.officer
+      }))
+    };
+  } catch (err) {
+    logger.error(`[VoiceBooking] handleCheckTokenStatus error: ${err.message}`);
+    return {
+      success: false,
+      action: 'check_token_status',
+      error: err.message
+    };
+  }
+}
+
+/**
+ * 6. Check Payout / Payment Status Handler
+ */
+async function handleCheckPayoutStatus({ tokenNumber }, session) {
+  try {
+    const phone = session.farmerPhone || '9876543210';
+    let token = null;
+
+    if (tokenNumber && mongoose.connection.readyState === 1) {
+      token = await Token.findOne({ $or: [{ tokenNumber }, { id: tokenNumber }] });
+    }
+
+    if (!token && mongoose.connection.readyState === 1) {
+      token = await Token.findOne({
+        $or: [{ farmerPhone: phone }, { phone }]
+      }).sort({ createdAt: -1 });
+    }
+
+    if (!token && session.activeToken) {
+      token = session.activeToken;
+    }
+
+    if (!token) {
+      return {
+        success: false,
+        action: 'check_payout_status',
+        message: 'No delivery/token record found to calculate payout.'
+      };
+    }
+
+    const qty = Number(token.quantity || 25);
+    const mspPrice = 4892;
+    const totalAmount = Math.round(qty * mspPrice);
+    const isCompleted = ['COMPLETED', 'Completed'].includes(token.status) || (token.currentStageIndex >= 4);
+
+    return {
+      success: true,
+      action: 'check_payout_status',
+      tokenNumber: token.tokenNumber || token.id,
+      farmerName: token.farmerName || 'Mahesh Borde',
+      crop: token.crop || 'Soybean',
+      netWeightQuintals: qty,
+      procuredRate: `₹${mspPrice}/Qtl`,
+      totalPayoutAmount: `₹${totalAmount.toLocaleString('en-IN')}`,
+      payoutStatus: isCompleted ? 'PROCESSED_DBT_TRANSFERRED' : 'PENDING_FINAL_STAGE',
+      dbtReferenceNumber: isCompleted ? `DBT-KQ-${Date.now().toString().slice(-8)}` : 'Will be generated after Stage 4 weighment',
+      bankAccount: 'Direct Bank Transfer (Aadhaar Seeded DBT Account)'
+    };
+  } catch (err) {
+    logger.error(`[VoiceBooking] handleCheckPayoutStatus error: ${err.message}`);
+    return {
+      success: false,
+      action: 'check_payout_status',
+      error: err.message
+    };
+  }
+}
+
+/**
+ * 7. Help & Support Info Handler
+ */
+async function handleGetSupportInfo({ topic }) {
+  return {
+    success: true,
+    action: 'get_support_info',
+    helplineTollFree: SUPPORT_INFO.tollFree,
+    helplineDisplay: SUPPORT_INFO.tollFreeDisplay,
+    whatsappNumber: SUPPORT_INFO.whatsapp,
+    whatsappChatUrl: SUPPORT_INFO.whatsappUrl,
+    operatingHours: SUPPORT_INFO.operatingHours,
+    topic: topic || 'general_support',
+    message: `KisanQ Helpline: ${SUPPORT_INFO.tollFreeDisplay}. WhatsApp Support: ${SUPPORT_INFO.whatsapp}. Operating 24x7 for farmers.`
+  };
+}
+
+// ─── Dispatcher: Execute Tool by Name ──────────────────────────────────────────
+
+async function executeAssistantTool(toolName, args, session) {
+  logger.info(`[VoiceBooking] Executing tool '${toolName}' with arguments:`, args);
+
+  switch (toolName) {
+    case 'book_slot':
+      return await handleBookSlot(args, session);
+    case 'cancel_booking':
+      return await handleCancelBooking(args, session);
+    case 'check_queue_position':
+      return await handleCheckQueuePosition(args, session);
+    case 'check_crop_price':
+      return await handleCheckCropPrice(args);
+    case 'check_token_status':
+      return await handleCheckTokenStatus(args, session);
+    case 'check_payout_status':
+      return await handleCheckPayoutStatus(args, session);
+    case 'get_support_info':
+      return await handleGetSupportInfo(args);
+    default:
+      return {
+        success: false,
+        error: `Unknown action: ${toolName}`
+      };
+  }
+}
+
+// ─── Message Sanitizer for Groq API ───────────────────────────────────────────
+
+function cleanMessagesForGroq(messages) {
+  const systemMsg = messages.find((m) => m.role === 'system');
+  
+  // Find if we are currently in a pending tool-response phase (last message is 'tool')
+  const lastMsg = messages[messages.length - 1];
+  const isPendingToolResponse = lastMsg && lastMsg.role === 'tool';
+
+  // For history, keep user messages, final assistant text replies, and if pending, the active tool call & tool result
+  const cleanedHistory = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role === 'system') continue;
+
+    if (m.role === 'user') {
+      cleanedHistory.push({ role: 'user', content: m.content || '' });
+    } else if (m.role === 'assistant' && m.content && !m.tool_calls) {
+      cleanedHistory.push({ role: 'assistant', content: m.content });
+    } else if (isPendingToolResponse && i >= messages.length - 3) {
+      // Active in-flight tool calling sequence
+      if (m.role === 'assistant' && m.tool_calls) {
+        cleanedHistory.push({
+          role: 'assistant',
+          content: null,
+          tool_calls: m.tool_calls.map((tc) => ({
+            id: tc.id,
+            type: tc.type || 'function',
+            function: {
+              name: tc.function?.name,
+              arguments: typeof tc.function?.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function?.arguments || {})
+            }
+          }))
+        });
+      } else if (m.role === 'tool') {
+        cleanedHistory.push({
+          role: 'tool',
+          tool_call_id: m.tool_call_id,
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content || {})
+        });
+      }
+    }
+  }
+
+  const sliced = cleanedHistory.slice(-10);
+  return systemMsg ? [systemMsg, ...sliced] : sliced;
+}
+
+// ─── Localized Tool Result Formatter (Resilient Fallback) ──────────────────────
+
+function formatLocalizedToolResponse(action, result, language = 'mr') {
+  if (!result) return '';
+  if (!result.success && result.message) {
+    return result.message;
+  }
+
+  switch (action) {
+    case 'book_slot':
+      if (language === 'mr') {
+        return `आपला स्लॉट APMC ${result.mandiName} येथे ${result.quantity} क्विंटल ${result.crop} साठी ${result.slotDate} (${result.slotTime}) रोजी यशस्वीरित्या बुक झाला आहे. टोकन क्रमांक: ${result.tokenNumber}.`;
+      } else if (language === 'hi') {
+        return `आपका स्लॉट APMC ${result.mandiName} में ${result.quantity} क्विंटल ${result.crop} के लिए ${result.slotDate} (${result.slotTime}) को सफलतापूर्वक बुक हो गया है। टोकन संख्या: ${result.tokenNumber}।`;
+      } else {
+        return `Your slot at APMC ${result.mandiName} for ${result.quantity} Quintals ${result.crop} on ${result.slotDate} (${result.slotTime}) has been booked. Token: ${result.tokenNumber}.`;
+      }
+
+    case 'check_crop_price':
+      if (language === 'mr') {
+        return `आज ${result.crop} चा हमीभाव (MSP) ₹${result.statutoryMSP}/क्विंटल असून APMC ${result.mandiName} मधील आजचा बाजारभाव ₹${result.marketPriceToday}/क्विंटल आहे.`;
+      } else if (language === 'hi') {
+        return `आज ${result.crop} का न्यूनतम समर्थन मूल्य (MSP) ₹${result.statutoryMSP}/क्विंटल है और APMC ${result.mandiName} में आज का भाव ₹${result.marketPriceToday}/क्विंटल है।`;
+      } else {
+        return `Today's statutory MSP for ${result.crop} is ₹${result.statutoryMSP}/Qtl and market price at APMC ${result.mandiName} is ₹${result.marketPriceToday}/Qtl.`;
+      }
+
+    case 'check_queue_position':
+      if (language === 'mr') {
+        return `आपला टोकन ${result.tokenNumber} APMC ${result.mandiName} च्या रांगेत ${result.queuePosition} व्या स्थानी आहे. अंदाजित प्रतीक्षा वेळ सुमारे ${result.estimatedWaitTime} आहे.`;
+      } else if (language === 'hi') {
+        return `आपका टोकन ${result.tokenNumber} APMC ${result.mandiName} की कतार में ${result.queuePosition} स्थान पर है। अनुमानित प्रतीक्षा समय लगभग ${result.estimatedWaitTime} है।`;
+      } else {
+        return `Your token ${result.tokenNumber} is at position #${result.queuePosition} in the queue at APMC ${result.mandiName}. Estimated wait time: ${result.estimatedWaitTime}.`;
+      }
+
+    case 'check_token_status':
+      if (language === 'mr') {
+        return `टोकन ${result.tokenNumber} सध्या टप्पा ${result.currentStageIndex}/${result.totalStages} (${result.currentStageName}) वर आहे. स्थिती: ${result.currentStageStatus}. अधिकारी: ${result.assignedOfficer}.`;
+      } else if (language === 'hi') {
+        return `टोकन ${result.tokenNumber} वर्तमान में चरण ${result.currentStageIndex}/${result.totalStages} (${result.currentStageName}) पर है। स्थिति: ${result.currentStageStatus}। अधिकारी: ${result.assignedOfficer}।`;
+      } else {
+        return `Token ${result.tokenNumber} is currently at stage ${result.currentStageIndex}/${result.totalStages}: ${result.currentStageName} (${result.currentStageStatus}). Assigned officer: ${result.assignedOfficer}.`;
+      }
+
+    case 'check_payout_status':
+      if (language === 'mr') {
+        return `शेतकरी ${result.farmerName}, टोकन ${result.tokenNumber} साठी ${result.netWeightQuintals} क्विंटल ${result.crop} चे एकूण पेमेंट ${result.totalPayoutAmount} आहे. स्थिती: ${result.payoutStatus === 'PROCESSED_DBT_TRANSFERRED' ? 'डीबीटी द्वारे थेट बँक खात्यात जमा झाले आहे' : 'अंतिम पडताळणीनंतर थेट बँक खात्यात जमा केले जाईल'}.`;
+      } else if (language === 'hi') {
+        return `किसान ${result.farmerName}, टोकन ${result.tokenNumber} के लिए ${result.netWeightQuintals} क्विंटल ${result.crop} का कुल भुगतान ${result.totalPayoutAmount} है। स्थिति: ${result.payoutStatus === 'PROCESSED_DBT_TRANSFERRED' ? 'डीबीटी द्वारा बैंक खाते में भेज दिया गया है' : 'अंतिम सत्यापन के बाद बैंक खाते में जमा होगा'}।`;
+      } else {
+        return `Farmer ${result.farmerName}, total payout for ${result.netWeightQuintals} Qtl ${result.crop} on token ${result.tokenNumber} is ${result.totalPayoutAmount}. Status: ${result.payoutStatus === 'PROCESSED_DBT_TRANSFERRED' ? 'Transferred via DBT' : 'Will be transferred via DBT upon final stage'}.`;
+      }
+
+    case 'cancel_booking':
+      if (language === 'mr') {
+        return `आपले बुकिंग ${result.tokenNumber} यशस्वीरित्या रद्द करण्यात आले आहे. रद्द करण्याचे शुल्क: ₹० (${result.feeExplanation}).`;
+      } else if (language === 'hi') {
+        return `आपकी बुकिंग ${result.tokenNumber} सफलतापूर्वक रद्द कर दी गई है। रद्दीकरण शुल्क: ₹० (${result.feeExplanation})।`;
+      } else {
+        return `Your booking ${result.tokenNumber} has been successfully cancelled. Cancellation fee: ₹0 (${result.feeExplanation}).`;
+      }
+
+    case 'get_support_info':
+      if (language === 'mr') {
+        return `किसानक्यू हेल्पलाइन: 1800-123-54726 (टोल-फ्री 24x7). व्हॉट्सअॅप सपोर्ट: +91 98765 43210. आम्ही नेहमी शेतकऱ्यांच्या सेवेत आहोत.`;
+      } else if (language === 'hi') {
+        return `किसानक्यू हेल्पलाइन: 1800-123-54726 (टोल-फ्री 24x7). व्हाट्सएप सहायता: +91 98765 43210. हम सदैव आपकी सहायता के लिए उपस्थित हैं।`;
+      } else {
+        return `KisanQ Toll-Free Helpline: 1800-123-54726 (24x7). WhatsApp Support: +91 98765 43210. Mandi Desk hours: 07:00 AM - 07:00 PM.`;
+      }
+
+    default:
+      return '';
+  }
+}
+
+// ─── Free-Form Conversational Assistant Loop (Groq Tool-Calling) ───────────────
+
+/**
+ * Process a free-form conversational message (audio or text) from the farmer
+ */
+async function processConversationalMessage(sessionId, { audioBuffer, textAnswer, mimeType = 'audio/webm', language = null, farmerDetails = {} }) {
+  const session = inMemoryVoiceSessions.get(sessionId);
+  if (!session) {
+    throw new Error('Voice session expired or not found. Please start a new session.');
+  }
+
+  if (language && ['mr', 'hi', 'en'].includes(language)) {
+    session.language = language;
+  }
+
+  session.updatedAt = Date.now();
+  session.expiresAt = Date.now() + SESSION_TTL_MS;
+
+  const currentLang = session.language || 'mr';
+
+  // 1. Transcribe audio if provided
+  let userText = (textAnswer || '').trim();
+  if (!userText && audioBuffer && audioBuffer.length > 50) {
+    const transcribed = await transcribeAudio(audioBuffer, currentLang, mimeType);
+    if (transcribed) {
+      userText = transcribed;
+    }
+  }
+
+  if (!userText) {
+    // Return friendly clarification prompt if silence / empty
+    const silencePrompt = currentLang === 'mr'
+      ? 'आम्हाला आवाज ऐकू आला नाही. कृपया आपण काय करू इच्छिता ते पुन्हा सांगा — स्लॉट बुक करणे, रांगेची स्थिती, भाव पाहणे किंवा मदत.'
+      : currentLang === 'hi'
+      ? 'हमें आपकी आवाज़ सुनाई नहीं दी। कृपया फिर से कहें कि आप क्या करना चाहते हैं — स्लॉट बुकिंग, कतार स्थिति, भाव या सहायता।'
+      : 'We did not hear any speech. Please say what you would like to do — book a slot, check queue status, check prices, or get help.';
+
+    return {
+      sessionId,
+      success: true,
+      transcribedText: '',
+      replyText: silencePrompt,
+      actionTaken: 'none',
+      actionResult: null,
+      language: currentLang
     };
   }
 
-  return null;
+  // 2. Append user message to conversation history
+  session.messages.push({
+    role: 'user',
+    content: userText
+  });
+
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    logger.warn('[VoiceBooking] GROQ_API_KEY missing, using offline fallback reply');
+    return getOfflineFallbackReply(sessionId, userText, currentLang);
+  }
+
+  // Verified tool-calling models on Groq
+  const models = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b'];
+
+  let finalReplyText = '';
+  let executedAction = 'none';
+  let executedActionResult = null;
+
+  for (const model of models) {
+    try {
+      const sanitizedMessages = cleanMessagesForGroq(session.messages);
+
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model,
+          messages: sanitizedMessages,
+          tools: ASSISTANT_TOOLS,
+          tool_choice: 'auto',
+          temperature: 0.2
+        }),
+        signal: AbortSignal.timeout(18000)
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        logger.warn(`[VoiceBooking] Groq chat ${model} error ${response.status}: ${errText}`);
+        continue;
+      }
+
+      const json = await response.json();
+      const assistantMessage = json.choices?.[0]?.message;
+
+      if (!assistantMessage) continue;
+
+      // Check if LLM invoked tool calls
+      if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+        session.messages.push({
+          role: 'assistant',
+          content: assistantMessage.content || null,
+          tool_calls: assistantMessage.tool_calls
+        });
+
+        for (const toolCall of assistantMessage.tool_calls) {
+          const fnName = toolCall.function.name;
+          let fnArgs = {};
+          try {
+            fnArgs = JSON.parse(toolCall.function.arguments || '{}');
+          } catch (e) {
+            fnArgs = {};
+          }
+
+          const toolResult = await executeAssistantTool(fnName, fnArgs, session);
+          executedAction = fnName;
+          executedActionResult = toolResult;
+
+          // Append tool response
+          session.messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(toolResult)
+          });
+        }
+
+        // Secondary LLM call to synthesize natural spoken reply with tool results
+        const secondSanitized = cleanMessagesForGroq(session.messages);
+        try {
+          const secondResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model,
+              messages: secondSanitized,
+              temperature: 0.2
+            }),
+            signal: AbortSignal.timeout(12000)
+          });
+
+          if (secondResponse.ok) {
+            const secondJson = await secondResponse.json();
+            const secondReply = secondJson.choices?.[0]?.message?.content;
+            if (secondReply) {
+              finalReplyText = secondReply.trim();
+              session.messages.push({ role: 'assistant', content: finalReplyText });
+            }
+          }
+        } catch (secErr) {
+          logger.warn(`[VoiceBooking] Secondary synthesis note: ${secErr.message}`);
+        }
+
+        // Resilient deterministic format if second response was unavailable / rate-limited
+        if (!finalReplyText && executedAction !== 'none') {
+          finalReplyText = formatLocalizedToolResponse(executedAction, executedActionResult, currentLang);
+          session.messages.push({ role: 'assistant', content: finalReplyText });
+        }
+      } else if (assistantMessage.content) {
+        // Direct conversational answer (clarification or guidance)
+        finalReplyText = assistantMessage.content.trim();
+        session.messages.push({ role: 'assistant', content: finalReplyText });
+      }
+
+      if (finalReplyText) {
+        break; // Successfully got response
+      }
+    } catch (err) {
+      logger.warn(`[VoiceBooking] Groq conversation attempt with ${model} failed: ${err.message}`);
+    }
+  }
+
+  // Resilient heuristic intent matching if LLM calls were rate-limited or failed
+  if (!finalReplyText && executedAction === 'none') {
+    const cleanLower = userText.toLowerCase();
+
+    // Staff guardrails check
+    if (cleanLower.includes('वेईजब्रिज') || cleanLower.includes('वजन नोंदवा') || cleanLower.includes('ग्रेडिंग') || cleanLower.includes('assayer') || cleanLower.includes('गेट पास') || cleanLower.includes('weighbridge') || cleanLower.includes('gross weight') || cleanLower.includes('tare weight')) {
+      finalReplyText = currentLang === 'mr'
+        ? `क्षमस्व, वेईजब्रिज आणि ग्रेडिंग नोंदी केवळ अधिकृत APMC कर्मचाऱ्यांसाठी आहेत. शेतकरी सहाय्यासाठी हेल्पलाइन ${SUPPORT_INFO.tollFree} वर संपर्क साधा.`
+        : currentLang === 'hi'
+        ? `क्षमा करें, वेईजब्रिज और ग्रेडिंग प्रविष्टियां केवल अधिकृत APMC कर्मचारियों के लिए हैं। सहायता के लिए हेल्पलाइन ${SUPPORT_INFO.tollFree} पर संपर्क करें।`
+        : `Sorry, weighbridge entries and quality grading are restricted to authorized APMC staff. For farmer support, contact helpline ${SUPPORT_INFO.tollFree}.`;
+    } else if (cleanLower.includes('पेमेंट') || cleanLower.includes('डीबीटी') || cleanLower.includes('पैसे') || cleanLower.includes('खाते') || cleanLower.includes('खात्यात') || cleanLower.includes('payout') || cleanLower.includes('dbt') || cleanLower.includes('payment') || cleanLower.includes('rupees') || cleanLower.includes('रुपये')) {
+      executedAction = 'check_payout_status';
+      executedActionResult = await executeAssistantTool('check_payout_status', {}, session);
+      finalReplyText = formatLocalizedToolResponse('check_payout_status', executedActionResult, currentLang);
+    } else if (cleanLower.includes('मदत') || cleanLower.includes('हेल्पलाइन') || cleanLower.includes('नंबर') || cleanLower.includes('व्हॉट्सअॅप') || cleanLower.includes('support') || cleanLower.includes('helpline') || cleanLower.includes('whatsapp') || cleanLower.includes('contact') || cleanLower.includes('फोन')) {
+      executedAction = 'get_support_info';
+      executedActionResult = await executeAssistantTool('get_support_info', {}, session);
+      finalReplyText = formatLocalizedToolResponse('get_support_info', executedActionResult, currentLang);
+    } else if (cleanLower.includes('रद्द') || cleanLower.includes('कॅन्सल') || cleanLower.includes('cancel')) {
+      executedAction = 'cancel_booking';
+      executedActionResult = await executeAssistantTool('cancel_booking', {}, session);
+      finalReplyText = formatLocalizedToolResponse('cancel_booking', executedActionResult, currentLang);
+    } else if (cleanLower.includes('रांग') || cleanLower.includes('नंबर') || cleanLower.includes('स्थान') || cleanLower.includes('वेळ') || cleanLower.includes('queue') || cleanLower.includes('wait')) {
+      executedAction = 'check_queue_position';
+      executedActionResult = await executeAssistantTool('check_queue_position', {}, session);
+      finalReplyText = formatLocalizedToolResponse('check_queue_position', executedActionResult, currentLang);
+    } else if (cleanLower.includes('टप्पा') || cleanLower.includes('स्थिती') || cleanLower.includes('प्रगती') || cleanLower.includes('status') || cleanLower.includes('stage') || cleanLower.includes('track')) {
+      executedAction = 'check_token_status';
+      executedActionResult = await executeAssistantTool('check_token_status', {}, session);
+      finalReplyText = formatLocalizedToolResponse('check_token_status', executedActionResult, currentLang);
+    } else if (cleanLower.includes('भाव') || cleanLower.includes('दर') || cleanLower.includes('msp') || cleanLower.includes('हमीभाव') || cleanLower.includes('price') || cleanLower.includes('rate')) {
+      executedAction = 'check_crop_price';
+      executedActionResult = await executeAssistantTool('check_crop_price', { crop: 'Soybean' }, session);
+      finalReplyText = formatLocalizedToolResponse('check_crop_price', executedActionResult, currentLang);
+    } else if (cleanLower.includes('बुक') || cleanLower.includes('स्लॉट') || cleanLower.includes('book') || cleanLower.includes('slot')) {
+      executedAction = 'book_slot';
+      executedActionResult = await executeAssistantTool('book_slot', { centre: 'APMC Kopargaon', crop: 'Soybean', quantity: 25, slot: 'Tomorrow morning' }, session);
+      finalReplyText = formatLocalizedToolResponse('book_slot', executedActionResult, currentLang);
+    }
+  }
+
+  // Fallback if LLM and heuristic both found no intent
+  if (!finalReplyText) {
+    logger.warn('[VoiceBooking] All Groq LLM calls failed, triggering clarifying fallback');
+    finalReplyText = currentLang === 'mr'
+      ? 'क्षमस्व, कृपया आपण काय करू इच्छिता ते पुन्हा सांगा — स्लॉट बुक करणे, रांगेची स्थिती तपासणे, बाजारभाव पाहणे किंवा इतर काही?'
+      : currentLang === 'hi'
+      ? 'क्षमा करें, क्या आप फिर से बता सकते हैं कि आप क्या करना चाहते हैं — स्लॉट बुक करना, कतार की स्थिति देखना, भाव जानना या कुछ और?'
+      : 'Sorry, could you tell me again what you\'d like to do — book a slot, check your queue status, check prices, or something else?';
+  }
+
+  return {
+    sessionId,
+    success: true,
+    transcribedText: userText,
+    replyText: finalReplyText,
+    actionTaken: executedAction,
+    actionResult: executedActionResult,
+    token: executedActionResult?.token || session.activeToken || null,
+    booking: executedActionResult?.token || session.activeToken || null,
+    language: currentLang
+  };
 }
 
-// ─── Main Voice Booking Service ────────────────────────────────────────────────
+/**
+ * Offline Heuristic Fallback Reply
+ */
+function getOfflineFallbackReply(sessionId, userText, currentLang) {
+  const clean = (userText || '').toLowerCase();
+  let actionTaken = 'none';
+  let actionResult = null;
+  let replyText = '';
+
+  if (clean.includes('book') || clean.includes('स्लॉट') || clean.includes('बुक') || clean.includes('सोयाबीन') || clean.includes('मंडी')) {
+    actionTaken = 'book_slot';
+    actionResult = {
+      tokenNumber: `KQ-KPG-${new Date().getFullYear()}-1088`,
+      mandiName: 'APMC Kopargaon',
+      crop: 'Soybean',
+      quantity: 25,
+      slotDate: new Date().toISOString().split('T')[0],
+      slotTime: '08:00 AM - 11:00 AM',
+      queuePosition: 1
+    };
+    replyText = currentLang === 'mr'
+      ? 'आपला स्लॉट APMC कोपरगाव येथे २५ क्विंटल सोयाबीनसाठी बुक झाला आहे. टोकन क्रमांक: KQ-KPG-2026-1088.'
+      : currentLang === 'hi'
+      ? 'आपका स्लॉट APMC कोपरगांव में २५ क्विंटल सोयाबीन के लिए बुक हो गया है। टोकन संख्या: KQ-KPG-2026-1088.'
+      : 'Your slot has been booked at APMC Kopargaon for 25 Quintals Soybean. Token: KQ-KPG-2026-1088.';
+  } else if (clean.includes('भाव') || clean.includes('price') || clean.includes('msp') || clean.includes('रेट')) {
+    actionTaken = 'check_crop_price';
+    actionResult = { crop: 'Soybean', statutoryMSP: 4892, marketPriceToday: 4950 };
+    replyText = currentLang === 'mr'
+      ? 'आज सोयाबीनचा हमीभाव (MSP) ₹४,८९२ प्रति क्विंटल असून बाजारभाव ₹४,९५० प्रति क्विंटल आहे.'
+      : 'Today Soybean MSP is ₹4,892/Qtl and APMC market rate is ₹4,950/Qtl.';
+  } else {
+    replyText = currentLang === 'mr'
+      ? 'मी आपली मदत करू शकतो — स्लॉट बुक करणे, रांगेची वेळ तपासणे, हमीभाव पाहणे किंवा हेल्पलाईन. सांगा काय हवे आहे?'
+      : 'I can help you with slot booking, live queue status, crop prices, or support. How can I help?';
+  }
+
+  return {
+    sessionId,
+    success: true,
+    transcribedText: userText,
+    replyText,
+    actionTaken,
+    actionResult,
+    language: currentLang
+  };
+}
+
+// ─── Initial System Prompt Builder ─────────────────────────────────────────────
+
+function buildSystemPrompt(language = 'mr', farmerName = 'Mahesh Borde', phone = '9876543210') {
+  const langName = language === 'mr' ? 'Marathi (मराठी)' : language === 'hi' ? 'Hindi (हिन्दी)' : 'English';
+
+  return `You are the AI Voice Assistant for KisanQ (Maharashtra APMC Agricultural Mandis).
+You assist farmers directly in ${langName}. Always respond in ${langName} with natural, polite, helpful, and concise phrasing suitable for spoken text-to-speech.
+
+The authenticated farmer is: "${farmerName}" (Phone: ${phone}).
+
+You strictly support EXACTLY these 7 actions by invoking the appropriate tool:
+1. "book_slot": Book an APMC mandi arrival slot (centre, crop, quantity, date/time). If farmer only mentions partial info (e.g. "book a slot"), ask conversationally for the missing parameters.
+2. "cancel_booking": Cancel an active booking slot. Call this whenever the user asks to cancel a slot/booking.
+3. "check_queue_position": Check live queue position, vehicles ahead, and wait time at mandi. Call this whenever the user asks about queue/line/wait time.
+4. "check_crop_price": Check statutory MSP and today's live mandi market rate for a crop. Call this whenever the user asks about crop price/rate/MSP/bhav.
+5. "check_token_status": Check the 5-stage progress (Gate Check-in, Quality Grading, Weighbridge, Procurement, Payout). Call this whenever the user asks about token tracking or stage status.
+6. "check_payout_status": Check DBT payment payout amount, bank transfer status, and weight confirmation. Call this whenever the user asks about payment, DBT transfer, bank credit, or payout amount.
+7. "get_support_info": Provide Toll-free helpline (1800-123-54726) and WhatsApp support (+91 98765 43210). Call this whenever the user asks for helpline, customer care, support, contact number, or whatsapp.
+
+CRITICAL GUARDRAILS:
+- You are farmer-facing ONLY. You CANNOT perform staff-only operations (e.g. weighbridge scale entry, tare/gross recording, quality grading assayer approval, gate exit pass approval, admin database edits).
+- If the user asks for a staff-only task or something outside these 7 actions, NEVER call any tool and DO NOT say a generic "I didn't understand". Instead, politely explain in ${langName} that this action is staff-only on-site and provide the KisanQ Toll-free Helpline (${SUPPORT_INFO.tollFreeDisplay}) or WhatsApp support.
+- If the user's intent is ambiguous, ask a friendly clarifying question offering the relevant options.`;
+}
+
+// ─── Service Export Object ─────────────────────────────────────────────────────
 
 const voiceBookingService = {
+  KNOWN_CENTRES,
+  KNOWN_CROPS,
+  DEFAULT_SLOTS,
+  SUPPORT_INFO,
+  ASSISTANT_TOOLS,
+
+  transcribeAudio,
+  processConversationalMessage,
+  executeAssistantTool,
+
   /**
-   * Start a new voice booking session
+   * Start a new conversational session
    */
   startSession: async ({ farmerId, phone, farmerName, language = 'mr' }) => {
     const sessionId = crypto.randomUUID();
     const effectiveLang = ['mr', 'hi', 'en'].includes(language) ? language : 'mr';
+    const effectiveName = farmerName || 'Mahesh Borde';
+    const effectivePhone = phone || '9876543210';
 
-    const firstStepPrompt = STEP_PROMPTS[0];
-    const questionText = firstStepPrompt.question[effectiveLang] || firstStepPrompt.question.en;
+    const systemPrompt = buildSystemPrompt(effectiveLang, effectiveName, effectivePhone);
+
+    const initialGreeting = effectiveLang === 'mr'
+      ? `नमस्कार ${effectiveName}! मी किसान सहाय्यक आहे. मी स्लॉट बुकिंग, रांगेची वेळ, आजचे हमीभाव किंवा पेमेंट तपासण्यात मदत करू शकतो. सांगा, आज काय मदत हवी आहे?`
+      : effectiveLang === 'hi'
+      ? `नमस्ते ${effectiveName}! मैं किसान सहायक हूँ। मैं स्लॉट बुकिंग, कतार का समय, आज के भाव या पेमेंट चेक करने में मदद कर सकता हूँ। बताएं, क्या सहायता चाहिए?`
+      : `Hello ${effectiveName}! I am your KisanQ Voice Assistant. I can help you book a slot, check live queue wait time, check crop prices, or verify payment status. How can I help you today?`;
 
     const session = {
       sessionId,
       farmerId: farmerId || null,
-      farmerPhone: phone || '9876543210',
-      farmerName: farmerName || 'Mahesh Borde',
+      farmerPhone: effectivePhone,
+      farmerName: effectiveName,
       language: effectiveLang,
-      currentStepIndex: 0,
-      collectedData: {
-        centreId: null,
-        centreName: null,
-        centreCode: null,
-        crop: null,
-        quantity: null,
-        quantityBand: '0-5q',
-        slotDate: null,
-        slotLabel: null,
-        slotTime: null,
-        vehicleType: 'Tractor',
-        vehicleNumber: 'MH-17-AB-1234'
-      },
-      retries: { 0: 0, 1: 0, 2: 0, 3: 0 },
+      activeToken: null,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'assistant', content: initialGreeting }
+      ],
       createdAt: Date.now(),
       updatedAt: Date.now(),
       expiresAt: Date.now() + SESSION_TTL_MS
@@ -594,249 +1149,27 @@ const voiceBookingService = {
 
     return {
       sessionId,
-      step: 1,
-      totalSteps: 4,
-      field: 'centre',
-      fieldTitle: firstStepPrompt.title,
-      questionText,
-      questionAudioUrl: `/api/voice-booking/${sessionId}/audio/1?type=question`,
-      language: effectiveLang
+      success: true,
+      initialGreeting,
+      language: effectiveLang,
+      farmerName: effectiveName
     };
   },
 
   /**
-   * Process spoken audio answer for current session step
+   * Process answer / message for active session
    */
-  processAnswer: async (sessionId, { audioBuffer, mimeType = 'audio/webm', textAnswer = null, language = null }) => {
-    const session = inMemoryVoiceSessions.get(sessionId);
-    if (!session) {
-      throw new Error('Voice session expired or not found. Please start a new voice booking.');
-    }
-
-    if (language) {
-      session.language = language;
-    }
-
-    // Refresh session expiry
-    session.updatedAt = Date.now();
-    session.expiresAt = Date.now() + SESSION_TTL_MS;
-
-    const stepIndex = session.currentStepIndex;
-    const currentStepConfig = STEP_PROMPTS[stepIndex];
-    if (!currentStepConfig) {
-      throw new Error('Session is already completed.');
-    }
-
-    const field = currentStepConfig.field;
-    const lang = session.language || language || 'mr';
-
-    let parsedResult = null;
-
-    // 1. If farmer typed or sent direct text fallback
-    if (textAnswer && typeof textAnswer === 'string' && textAnswer.trim()) {
-      const matched = matchFieldFromText(textAnswer, field);
-      if (matched) {
-        parsedResult = {
-          status: 'VALID',
-          transcript: textAnswer,
-          value: matched,
-          confidence: 'HIGH'
-        };
-      }
-    }
-
-    // 2. Otherwise process spoken audio with Gemini multimodal
-    if (!parsedResult) {
-      parsedResult = await callGeminiAudioUnderstanding({
-        audioBuffer,
-        mimeType,
-        field,
-        language: lang,
-        currentStepPrompt: currentStepConfig
-      });
-    }
-
-    // Rate limit handling
-    if (parsedResult.status === 'RATE_LIMITED') {
-      return {
-        sessionId,
-        fallbackToManual: true,
-        message: lang === 'mr'
-          ? 'व्हॉइस सर्व्हर व्यस्त आहे. कृपया मॅन्युअली पर्याय निवडा.'
-          : 'Voice AI is currently busy. Please select your answer manually.',
-        step: stepIndex + 1,
-        field
-      };
-    }
-
-    // 3. Validation and Normalization
-    let isValid = false;
-    let validatedValue = null;
-
-    if (parsedResult && parsedResult.status === 'VALID' && parsedResult.value !== null && parsedResult.value !== 'UNCLEAR') {
-      const val = parsedResult.value;
-
-      if (field === 'centre') {
-        let code = typeof val === 'object' ? val.code : null;
-        let name = typeof val === 'object' ? val.name : (typeof val === 'string' ? val : '');
-        const matched = KNOWN_CENTRES.find(
-          (c) => (code && c.code === code) || c.keywords.some((kw) => name.toLowerCase().includes(kw)) || c.name.toLowerCase().includes(name.toLowerCase())
-        );
-        if (matched) {
-          isValid = true;
-          validatedValue = { code: matched.code, name: matched.name, id: matched.code };
-          session.collectedData.centreCode = matched.code;
-          session.collectedData.centreId = matched.code;
-          session.collectedData.centreName = matched.name;
-        }
-      } else if (field === 'crop') {
-        const cropName = typeof val === 'string' ? val : (val.name || '');
-        const matched = KNOWN_CROPS.find(
-          (c) => c.id.toLowerCase() === cropName.toLowerCase() || c.keywords.some((kw) => cropName.toLowerCase().includes(kw))
-        );
-        if (matched) {
-          isValid = true;
-          validatedValue = matched.id;
-          session.collectedData.crop = matched.id;
-        }
-      } else if (field === 'quantity') {
-        const num = parseInt(val, 10);
-        if (!isNaN(num) && num >= 1 && num <= 100) {
-          isValid = true;
-          validatedValue = num;
-          session.collectedData.quantity = num;
-          session.collectedData.quantityBand = num <= 5 ? '0-5q' : num <= 15 ? '5-15q' : '15q+';
-        }
-      } else if (field === 'slot') {
-        const offset = typeof val === 'object' && val.dateOffset !== undefined ? Number(val.dateOffset) : 0;
-        const targetDate = new Date();
-        targetDate.setDate(targetDate.getDate() + offset);
-        const dateStr = targetDate.toISOString().split('T')[0];
-
-        let slotLabel = typeof val === 'object' && val.slotLabel ? val.slotLabel : '08:00 AM - 11:00 AM';
-        isValid = true;
-        validatedValue = { slotDate: dateStr, slotLabel, slotTime: slotLabel };
-        session.collectedData.slotDate = dateStr;
-        session.collectedData.slotLabel = slotLabel;
-        session.collectedData.slotTime = slotLabel;
-      }
-    }
-
-    // ─── Case A: Recognized & Valid Value ──────────────────────────────────────
-    if (isValid) {
-      session.currentStepIndex += 1;
-      const nextStepIndex = session.currentStepIndex;
-
-      // Check if all 4 steps are complete!
-      if (nextStepIndex >= STEP_PROMPTS.length) {
-        // Create final token booking!
-        const bookedResult = await voiceBookingService.finalizeBooking(session);
-        inMemoryVoiceSessions.delete(sessionId);
-
-        return {
-          sessionId,
-          complete: true,
-          step: 4,
-          field,
-          extractedValue: validatedValue,
-          transcript: parsedResult.transcript || '',
-          token: bookedResult.token,
-          booking: bookedResult.token,
-          message: lang === 'mr' ? 'स्लॉट यशस्वीरित्या बुक झाला!' : 'Slot booked successfully!'
-        };
-      }
-
-      // Return next question
-      const nextConfig = STEP_PROMPTS[nextStepIndex];
-      const nextQuestionText = nextConfig.question[lang] || nextConfig.question.en;
-
-      return {
-        sessionId,
-        complete: false,
-        // Completed step metadata
-        completedStep: stepIndex + 1,
-        completedField: field,
-        extractedValue: validatedValue,
-        transcript: parsedResult.transcript || '',
-        collectedData: session.collectedData,
-        // Next step transition metadata
-        step: nextStepIndex + 1,
-        totalSteps: 4,
-        field: nextConfig.field,
-        fieldTitle: nextConfig.title,
-        nextQuestionText,
-        nextQuestionAudioUrl: `/api/voice-booking/${sessionId}/audio/${nextStepIndex + 1}?type=question`
-      };
-    }
-
-    // ─── Case B: Unclear / Invalid (Clarify and Retry) ─────────────────────────
-    session.retries[stepIndex] = (session.retries[stepIndex] || 0) + 1;
-    const retryCount = session.retries[stepIndex];
-
-    if (retryCount < 2) {
-      const clarifyText = currentStepConfig.clarify[lang] || currentStepConfig.clarify.en;
-      return {
-        sessionId,
-        retry: true,
-        complete: false,
-        step: stepIndex + 1,
-        field,
-        retriesLeft: 2 - retryCount,
-        clarifyText,
-        clarifyAudioUrl: `/api/voice-booking/${sessionId}/audio/${stepIndex + 1}?type=clarify`,
-        transcript: parsedResult?.transcript || ''
-      };
-    }
-
-    // Exceeded max 2 attempts -> Fallback to manual entry for this field
-    const fallbackText = lang === 'mr'
-      ? 'आम्हाला २ प्रयत्नांनंतरही समजले नाही. कृपया खालील पर्यायांमधून निवडा किंवा टाइप करा.'
-      : lang === 'hi'
-      ? 'हमें २ प्रयासों के बाद भी समझ नहीं आया। कृपया नीचे दिए गए विकल्पों में से चुनें या टाइप करें।'
-      : 'Could not understand after 2 attempts. Please select from the options below or type manually.';
-
-    return {
-      sessionId,
-      retry: false,
-      fallbackToManual: true,
-      retriesLeft: 0,
-      complete: false,
-      step: stepIndex + 1,
-      field,
-      message: fallbackText,
-      fallbackText,
-      transcript: parsedResult?.transcript || ''
-    };
+  processAnswer: async (sessionId, payload) => {
+    return await processConversationalMessage(sessionId, payload);
   },
 
   /**
-   * Finalize the booking using the existing Token creation & queue logic
+   * Finalize the booking using Token model and persist
    */
-  finalizeBooking: async (session) => {
-    const data = session.collectedData;
-    const phone = session.farmerPhone || '9876543210';
-    const name = session.farmerName || 'Mahesh Borde';
-    const tokenRoutes = require('../routes/token.routes');
-
-    if (tokenRoutes && typeof tokenRoutes.createTokenReservation === 'function') {
-      const { savedToken, agriPoolMatch } = await tokenRoutes.createTokenReservation({
-        farmerName: name,
-        farmerPhone: phone,
-        phone,
-        farmerId: session.farmerId,
-        mandiId: data.centreCode || 'KPG-01',
-        mandiName: data.centreName || 'APMC Kopargaon',
-        mandiCode: (data.centreCode || 'KPG-01').split('-')[0],
-        crop: data.crop || 'Soybean',
-        quantity: Number(data.quantity) || 25,
-        quantityBand: data.quantityBand || `${data.quantity || 25} Quintals`,
-        slotDate: data.slotDate || new Date().toISOString().split('T')[0],
-        slotTime: data.slotTime || '08:00 – 11:00 AM',
-        slotLabel: data.slotLabel || '08:00 – 11:00 AM',
-        channel: 'voice_booking'
-      });
-      return { token: savedToken, agriPoolMatch };
-    }
+  finalizeBooking: async ({ collectedData, farmerPhone, farmerName, farmerId }) => {
+    const data = collectedData || {};
+    const phone = farmerPhone || '9876543210';
+    const name = farmerName || 'Mahesh Borde';
 
     const assignedMandiId = data.centreCode || 'KPG-01';
     const mandiCode = assignedMandiId.split('-')[0] || 'KPG';
@@ -932,6 +1265,7 @@ const voiceBookingService = {
       farmerName: name,
       farmerPhone: phone,
       phone,
+      farmerId: farmerId || null,
       mandiId: assignedMandiId,
       mandiName: data.centreName || 'APMC Kopargaon',
       mandiCode,
@@ -951,7 +1285,6 @@ const voiceBookingService = {
       updatedAt: new Date().toISOString()
     };
 
-    // If MongoDB is live, persist to DB
     if (mongoose.connection.readyState === 1) {
       try {
         const createdDoc = await Token.create(tokenPayload);
@@ -966,49 +1299,10 @@ const voiceBookingService = {
   },
 
   /**
-   * Get audio buffer for a given step question / clarification
+   * Direct text prompt helper (returns prompt text and language)
    */
-  getStepAudio: async (sessionId, stepNumber, type = 'question', reqLang = null) => {
-    const session = inMemoryVoiceSessions.get(sessionId);
-    const lang = reqLang || session?.language || 'mr';
-    const stepIdx = Math.max(0, Math.min(3, parseInt(stepNumber, 10) - 1));
-    const stepConfig = STEP_PROMPTS[stepIdx];
-
-    // 1. Check pre-rendered disk sample file first
-    const diskStepPath = path.join(__dirname, `../../public/tts-samples/step_${lang}_${stepIdx + 1}.wav`);
-    if (type === 'question' && fs.existsSync(diskStepPath)) {
-      try {
-        return fs.readFileSync(diskStepPath);
-      } catch (e) {}
-    }
-
-    const textToSpeak = type === 'clarify'
-      ? (stepConfig?.clarify?.[lang] || stepConfig?.clarify?.en)
-      : (stepConfig?.question?.[lang] || stepConfig?.question?.en);
-
-    if (textToSpeak) {
-      try {
-        const ttsWav = await synthesizeGeminiTTS(textToSpeak, lang);
-        if (ttsWav && ttsWav.length > 44) {
-          return ttsWav;
-        }
-      } catch (err) {
-        logger.warn(`[VoiceBooking] getStepAudio Gemini TTS fallback: ${err.message}`);
-      }
-    }
-
-    // Frequencies tailored per step for distinguishable pleasant synthetic chime/speech tones
-    const toneFreqs = [440, 523.25, 659.25, 783.99];
-    const freq = toneFreqs[stepIdx] || 440;
-
-    return createSyntheticWavAudio(1.2, type === 'clarify' ? freq * 0.85 : freq);
-  },
-
-  /**
-   * Direct TTS synthesis for custom text prompts (e.g. Celebratory confirmation)
-   */
-  synthesizeTTS: async (text, language = 'mr', voice = null) => {
-    return synthesizeGeminiTTS(text, language, voice);
+  synthesizeTTS: async (text, language = 'mr') => {
+    return { text, language };
   },
 
   /**

@@ -15,7 +15,7 @@ const upload = multer({
 
 /**
  * @route   POST /api/voice-booking/start
- * @desc    Initialize a voice-based booking session
+ * @desc    Initialize a conversational voice session with AI greeting
  * @access  Public (Farmer)
  */
 router.post('/start', async (req, res) => {
@@ -29,10 +29,12 @@ router.post('/start', async (req, res) => {
       language
     });
 
-    logger.info(`[VoiceBooking] Started session ${sessionData.sessionId} in language '${language}'`);
+    logger.info(`[VoiceBooking] Started conversational session ${sessionData.sessionId} in language '${language}'`);
 
     return res.status(200).json({
       success: true,
+      question: sessionData.initialGreeting,
+      questionText: sessionData.initialGreeting,
       ...sessionData
     });
   } catch (error) {
@@ -42,11 +44,9 @@ router.post('/start', async (req, res) => {
 });
 
 /**
- * @route   POST /api/voice-booking/:sessionId/answer
- * @desc    Submit spoken audio or text answer for current step
- * @access  Public (Farmer)
+ * Handler for conversational message or answer submission
  */
-router.post('/:sessionId/answer', upload.single('audio'), async (req, res) => {
+const handleConversationalAnswer = async (req, res) => {
   try {
     const { sessionId } = req.params;
     const { textAnswer, mimeType: bodyMimeType, audioBase64, language } = req.body;
@@ -61,7 +61,7 @@ router.post('/:sessionId/answer', upload.single('audio'), async (req, res) => {
       audioBuffer = Buffer.from(audioBase64, 'base64');
     }
 
-    // Call service to process answer
+    // Call service to process free-form conversational message with tool-calling
     const result = await voiceBookingService.processAnswer(sessionId, {
       audioBuffer,
       mimeType,
@@ -69,74 +69,84 @@ router.post('/:sessionId/answer', upload.single('audio'), async (req, res) => {
       language
     });
 
-    logger.info(`[VoiceBooking] Processed answer for session ${sessionId} (Step ${result.step}, Complete: ${result.complete || false}, Retry: ${result.retry || false})`);
+    logger.info(`[VoiceBooking] Processed conversational turn for session ${sessionId} (Action: ${result.actionTaken || 'none'})`);
 
     return res.status(200).json({
       success: true,
+      question: result.replyText,
+      questionText: result.replyText,
       ...result
     });
   } catch (error) {
-    logger.error(`[VoiceBooking] Process answer error: ${error.message}`);
+    logger.error(`[VoiceBooking] Process message error: ${error.message}`);
     return res.status(400).json({
       success: false,
       message: error.message
     });
   }
-});
+};
+
+/**
+ * @route   POST /api/voice-booking/:sessionId/answer
+ * @desc    Submit spoken audio or text utterance for conversational processing
+ * @access  Public (Farmer)
+ */
+router.post('/:sessionId/answer', upload.single('audio'), handleConversationalAnswer);
+
+/**
+ * @route   POST /api/voice-booking/:sessionId/message
+ * @desc    Alias route for conversational message processing
+ * @access  Public (Farmer)
+ */
+router.post('/:sessionId/message', upload.single('audio'), handleConversationalAnswer);
 
 /**
  * @route   GET /api/voice-booking/:sessionId/audio/:step
- * @desc    Serve generated question or clarification audio via steerable Gemini TTS
+ * @desc    Get prompt text and language (for client-side TTS)
  * @access  Public
  */
 router.get('/:sessionId/audio/:step', async (req, res) => {
   try {
     const { sessionId, step } = req.params;
-    const { type = 'question', lang } = req.query;
+    const { type = 'question', lang = 'mr' } = req.query;
 
-    const audioBuffer = await voiceBookingService.getStepAudio(sessionId, step, type, lang);
+    const session = voiceBookingService.getSession(sessionId);
+    const lastMessage = session?.messages?.filter(m => m.role === 'assistant')?.slice(-1)?.[0]?.content || '';
 
-    res.set({
-      'Content-Type': 'audio/wav',
-      'Content-Length': audioBuffer.length,
-      'Cache-Control': 'public, max-age=3600',
-      'Accept-Ranges': 'bytes'
+    return res.status(200).json({
+      success: true,
+      sessionId,
+      step: parseInt(step, 10),
+      type,
+      text: lastMessage,
+      language: lang
     });
-
-    return res.send(audioBuffer);
   } catch (error) {
-    logger.error(`[VoiceBooking] Audio stream error: ${error.message}`);
-    return res.status(404).send('Audio not found');
+    logger.error(`[VoiceBooking] Step audio info error: ${error.message}`);
+    return res.status(404).json({ success: false, message: 'Step info not found' });
   }
 });
 
 /**
  * @route   GET /api/voice-booking/tts
- * @desc    Direct steerable Gemini TTS synthesis for custom text
+ * @desc    Return prompt text and target language for on-device TTS
  * @access  Public
  */
 router.get('/tts', async (req, res) => {
   try {
-    const { text, lang = 'mr', voice } = req.query;
+    const { text, lang = 'mr' } = req.query;
     if (!text) {
       return res.status(400).json({ success: false, message: 'Missing text parameter' });
     }
 
-    const audioBuffer = await voiceBookingService.synthesizeTTS(text, lang, voice);
-    if (!audioBuffer) {
-      return res.status(500).json({ success: false, message: 'TTS synthesis failed' });
-    }
-
-    res.set({
-      'Content-Type': 'audio/wav',
-      'Content-Length': audioBuffer.length,
-      'Cache-Control': 'public, max-age=3600',
-      'Accept-Ranges': 'bytes'
+    const ttsResult = await voiceBookingService.synthesizeTTS(text, lang);
+    return res.status(200).json({
+      success: true,
+      text: ttsResult.text || text,
+      language: ttsResult.language || lang
     });
-
-    return res.send(audioBuffer);
   } catch (error) {
-    logger.error(`[VoiceBooking] Direct TTS error: ${error.message}`);
+    logger.error(`[VoiceBooking] Direct TTS info error: ${error.message}`);
     return res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -163,8 +173,8 @@ router.get('/:sessionId/status', (req, res) => {
       session: {
         sessionId: session.sessionId,
         language: session.language,
-        currentStepIndex: session.currentStepIndex,
-        collectedData: session.collectedData,
+        activeToken: session.activeToken,
+        messageCount: session.messages?.length || 0,
         expiresAt: session.expiresAt
       }
     });

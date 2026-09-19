@@ -41,12 +41,12 @@ const DICTIONARY = {
       passwordLabel: 'Passcode / PIN',
       passwordPlaceholder: 'Enter 4-6 digit Passcode',
       otpLabel: '6-Digit Verification OTP',
-      otpPlaceholder: 'Enter OTP (123456)',
+      otpPlaceholder: 'Enter OTP (999999)',
       btnSendOtp: 'Send Verification OTP',
       btnVerifyLogin: 'Sign In & Open Dashboard',
       btnRegister: 'Register & Book Slot',
       btnQuickDemo: '⚡ 1-Click Quick Demo Login (Mahesh Borde)',
-      otpSentNotice: 'OTP sent! Use demo verification code: 123456',
+      otpSentNotice: 'OTP sent! Use demo verification code: 999999',
       secureNotice: 'Secure 256-bit encrypted authentication',
     },
     featuresHeading: {
@@ -163,12 +163,12 @@ const DICTIONARY = {
       passwordLabel: 'सुरक्षा पिन / पासवर्ड',
       passwordPlaceholder: '४-६ अंकीय पिन दर्ज करें',
       otpLabel: '६-अंकीय सत्यापन ओटीपी',
-      otpPlaceholder: 'ओटीपी दर्ज करें (123456)',
+      otpPlaceholder: 'ओटीपी दर्ज करें (999999)',
       btnSendOtp: 'ओटीपी प्राप्त करें',
       btnVerifyLogin: 'सत्यापित करें और प्रवेश करें',
       btnRegister: 'पंजीकरण पूर्ण करें',
       btnQuickDemo: '⚡ 1-क्लिक त्वरित डेमो लॉगिन (महेश बोर्डे)',
-      otpSentNotice: 'ओटीपी भेजा गया! डेमो कोड: 123456 का उपयोग करें',
+      otpSentNotice: 'ओटीपी भेजा गया! डेमो कोड: 999999 का उपयोग करें',
       secureNotice: 'सुरक्षित एवं एन्क्रिप्टेड पोर्टल',
     },
     featuresHeading: {
@@ -285,12 +285,12 @@ const DICTIONARY = {
       passwordLabel: 'पासवर्ड / पिन',
       passwordPlaceholder: '४-६ अंकी पिन टाका',
       otpLabel: '६-अंकी पडताळणी ओटीपी',
-      otpPlaceholder: 'ओटीपी टाका (123456)',
+      otpPlaceholder: 'ओटीपी टाका (999999)',
       btnSendOtp: 'ओटीपी पाठवा',
       btnVerifyLogin: 'पडताळणी करा व सुरू करा',
       btnRegister: 'नोंदणी करा व स्लॉट बुक करा',
       btnQuickDemo: '⚡ १-क्लिक जलद डेमो लॉगिन (महेश बोर्डे)',
-      otpSentNotice: 'ओटीपी पाठवला आहे! डेमो कोड: 123456 वापरा',
+      otpSentNotice: 'ओटीपी पाठवला आहे! डेमो कोड: 999999 वापरा',
       secureNotice: 'सुरक्षित व एन्क्रिप्टेड प्रणाली',
     },
     featuresHeading: {
@@ -640,7 +640,7 @@ export default function Landing() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [otp, setOtp] = useState('123456');
+  const [otp, setOtp] = useState('999999');
 
   // Clear any leftover/stale farmer session when initiating auth flow
   useEffect(() => {
@@ -679,7 +679,7 @@ export default function Landing() {
 
     setLoading(true);
     try {
-      const res = await farmerOtpRequest({
+      await farmerOtpRequest({
         phone: cleanPhone,
         name: fullName.trim() || undefined,
         preferredLanguage: lang,
@@ -687,9 +687,8 @@ export default function Landing() {
         passcode: password.trim() || undefined,
         mode: authTab
       });
-      if (res?.data?.devOtp || res?.devOtp) {
-        setOtp(res.data?.devOtp || res.devOtp);
-      }
+      setErrorMsg('');
+      setOtp('999999');
       setStep(2);
     } catch (err) {
       const msg = err.response?.data?.message || err.message || 'Failed to request verification code';
@@ -1013,9 +1012,11 @@ export default function Landing() {
               ) : (
                 /* Step 2: OTP Verification */
                 <form onSubmit={handleAuthSubmit} className="space-y-4">
-                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800">
-                    <p className="font-semibold">{t.auth.otpSentNotice}</p>
-                  </div>
+                  {!errorMsg && (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800">
+                      <p className="font-semibold">{t.auth.otpSentNotice}</p>
+                    </div>
+                  )}
 
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
@@ -1024,8 +1025,8 @@ export default function Landing() {
                       </label>
                       <button
                         type="button"
-                        onClick={() => setStep(1)}
-                        className="text-[11px] text-slate-500 hover:text-emerald-600 font-medium"
+                        onClick={() => { setStep(1); setErrorMsg(''); }}
+                        className="text-[11px] text-slate-500 hover:text-emerald-600 font-medium cursor-pointer"
                       >
                         Change number
                       </button>

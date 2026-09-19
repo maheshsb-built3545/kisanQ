@@ -15,6 +15,7 @@ import {
   Linking
 } from 'react-native';
 import { Audio } from 'expo-av';
+import * as Speech from 'expo-speech';
 import { useTranslation } from 'react-i18next';
 import { COLORS } from '../utils/constants';
 import voiceBookingApi from '../api/voiceBooking.api';
@@ -28,37 +29,63 @@ const LANGUAGES = [
   { code: 'en', name: 'English', label: 'English' }
 ];
 
-const SUGGESTED_RESPONSES = {
-  centre: [
-    { mr: 'कोपरगाव बाजार समिती', hi: 'कोपरगांव मंडी', en: 'APMC Kopargaon' },
-    { mr: 'शिर्डी उपबाजार समिती', hi: 'शिर्डी मंडी', en: 'APMC Shirdi' },
-    { mr: 'राहाता बाजार समिती', hi: 'राहाता मंडी', en: 'APMC Rahata' },
-    { mr: 'लासलगाव मुख्य बाजार समिती', hi: 'लासलगांव मंडी', en: 'APMC Lasalgaon' }
-  ],
-  crop: [
-    { mr: 'सोयाबीन', hi: 'सोयाबीन', en: 'Soybean' },
-    { mr: 'कापूस', hi: 'कपास', en: 'Cotton' },
-    { mr: 'गहू', hi: 'गेहूं', en: 'Wheat' },
-    { mr: 'कांदा', hi: 'प्याज', en: 'Onion' }
-  ],
-  quantity: [
-    { mr: 'पंचवीस क्विंटल (25)', hi: 'पच्चीस क्विंटल (25)', en: '25 Quintals' },
-    { mr: 'पन्नास क्विंटल (50)', hi: 'पचास क्विंटल (50)', en: '50 Quintals' },
-    { mr: 'दहा क्विंटल (10)', hi: 'दस क्विंटल (10)', en: '10 Quintals' },
-    { mr: 'शंभर क्विंटल (100)', hi: 'सौ क्विंटल (100)', en: '100 Quintals' }
-  ],
-  slot: [
-    { mr: 'उद्या सकाळी (08-10)', hi: 'कल सुबह (08-10)', en: 'Tomorrow morning' },
-    { mr: 'आज दुपारी (12-02)', hi: 'आज दोपहर (12-02)', en: 'Today midday' },
-    { mr: 'उद्या दुपारी (02-04)', hi: 'कल दोपहर (02-04)', en: 'Tomorrow afternoon' }
-  ]
-};
+const ACTION_PROMPTS = [
+  {
+    id: 'book',
+    mr: '🎙️ कोपरगावला २५ क्विंटल सोयाबीन स्लॉट बुक करा',
+    hi: '🎙️ कोपरगांव में २५ क्विंटल सोयाबीन स्लॉट बुक करें',
+    en: '🎙️ Book 25 Qtl Soybean slot at Kopargaon',
+    action: 'book_slot'
+  },
+  {
+    id: 'price',
+    mr: '📊 आजचा सोयाबीन व कापूस हमीभाव किती आहे?',
+    hi: '📊 आज का सोयाबीन व कपास का भाव क्या है?',
+    en: '📊 Check today\'s Soybean & Cotton MSP',
+    action: 'check_crop_price'
+  },
+  {
+    id: 'queue',
+    mr: '⏳ माझी रांगेतील जागा आणि वेळ तपासा',
+    hi: '⏳ मेरी कतार की स्थिति और समय जांचें',
+    en: '⏳ Check my live queue wait time',
+    action: 'check_queue_position'
+  },
+  {
+    id: 'status',
+    mr: '🔍 माझे टोकन कोणत्या टप्प्यावर आहे?',
+    hi: '🔍 मेरा टोकन किस चरण पर है?',
+    en: '🔍 Check my token 5-stage progress',
+    action: 'check_token_status'
+  },
+  {
+    id: 'payout',
+    mr: '💰 माझे डीबीटी पेमेंट जमा झाले आहे का?',
+    hi: '💰 मेरा भुगतान / डीबीटी चेक करें',
+    en: '💰 Check payout & DBT payment status',
+    action: 'check_payout_status'
+  },
+  {
+    id: 'cancel',
+    mr: '❌ माझे बुकिंग रद्द करा',
+    hi: '❌ मेरी बुकिंग रद्द करें',
+    en: '❌ Cancel my booking slot',
+    action: 'cancel_booking'
+  },
+  {
+    id: 'help',
+    mr: '📞 किसान हेल्पलाईन आणि व्हॉट्सअॅप नंबर',
+    hi: '📞 हेल्पलाइन और व्हाट्सएप सहायता',
+    en: '📞 Help, Helpline & WhatsApp Support',
+    action: 'get_support_info'
+  }
+];
 
 export default function VoiceBookingModal({
   visible,
   onClose,
   onBookingConfirmed,
-  farmerName = 'Farmer',
+  farmerName = 'Mahesh Borde',
   farmerPhone = '9876543210'
 }) {
   const { t, i18n } = useTranslation();
@@ -67,13 +94,10 @@ export default function VoiceBookingModal({
   // State
   const [language, setLanguage] = useState(currentAppLang);
   const [sessionId, setSessionId] = useState(null);
-  const [step, setStep] = useState(1);
-  const [totalSteps, setTotalSteps] = useState(4);
-  const [fieldTitle, setFieldTitle] = useState('Procurement Centre');
-  const [questionText, setQuestionText] = useState('');
-  const [collectedData, setCollectedData] = useState({});
+  const [messages, setMessages] = useState([]);
   const [transcript, setTranscript] = useState('');
-  const [clarification, setClarification] = useState(null);
+  const [lastActionResult, setLastActionResult] = useState(null);
+  const [lastActionTaken, setLastActionTaken] = useState('none');
 
   // Interaction State:
   // 'INITIALIZING' | 'ASSISTANT_SPEAKING' | 'LISTENING' | 'PROCESSING' | 'COMPLETED'
@@ -85,19 +109,18 @@ export default function VoiceBookingModal({
   const [hasPermission, setHasPermission] = useState(null);
   const [canAskAgain, setCanAskAgain] = useState(true);
   const [permissionExplaining, setPermissionExplaining] = useState(false);
-  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
 
   // Completed booking data
   const [completedResult, setCompletedResult] = useState(null);
 
   // Audio & Recording Refs
-  const soundRef = useRef(null);
   const recordingRef = useRef(null);
   const isMountedRef = useRef(true);
   const hardSafetyTimeoutRef = useRef(null);
   const hasSpokenRef = useRef(false);
   const lastSpokenTimeRef = useRef(0);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const scrollViewRef = useRef(null);
 
   // Pulse animation for mic
   useEffect(() => {
@@ -174,13 +197,9 @@ export default function VoiceBookingModal({
       hardSafetyTimeoutRef.current = null;
     }
 
-    if (soundRef.current) {
-      try {
-        await soundRef.current.stopAsync();
-        await soundRef.current.unloadAsync();
-      } catch (e) {}
-      soundRef.current = null;
-    }
+    try {
+      Speech.stop();
+    } catch (e) {}
 
     if (recordingRef.current) {
       try {
@@ -193,17 +212,15 @@ export default function VoiceBookingModal({
   const resetSession = async () => {
     await cleanupAudio();
     setSessionId(null);
-    setStep(1);
-    setTotalSteps(4);
-    setCollectedData({});
+    setMessages([]);
     setTranscript('');
-    setClarification(null);
     setErrorMessage('');
     setManualText('');
     setShowTypeInput(false);
     setIsOffline(false);
     setCompletedResult(null);
-    setConsecutiveFailures(0);
+    setLastActionResult(null);
+    setLastActionTaken('none');
     startNewSession(language);
   };
 
@@ -224,57 +241,79 @@ export default function VoiceBookingModal({
 
       if (data && data.success) {
         setSessionId(data.sessionId);
-        setStep(data.step || 1);
-        setTotalSteps(data.totalSteps || 4);
-        setFieldTitle(data.fieldTitle || 'Procurement Centre');
-        setQuestionText(data.question);
-        setCollectedData(data.collectedData || {});
-        setShowTypeInput(false);
-        setManualText('');
-        setConsecutiveFailures(0);
+        const greeting = data.initialGreeting || data.question || 'Hello! How can I help you today?';
 
-        // Auto-play the first question
-        speakQuestionAudio(data.sessionId, data.step || 1, 'question', lang, data.audioUrl);
+        setMessages([
+          { role: 'assistant', text: greeting, timestamp: new Date() }
+        ]);
+
+        // Auto-play the assistant greeting
+        speakAssistantText(greeting, lang);
       } else {
-        setErrorMessage(data?.message || 'Failed to initialize voice session');
+        setErrorMessage(data?.message || 'Failed to initialize voice assistant');
         setConvState('INITIALIZING');
       }
     } catch (err) {
       console.warn('[VoiceBooking] Start session error:', err);
       if (!isMountedRef.current) return;
       setIsOffline(true);
-      setErrorMessage('Network error: Unable to connect to Voice Booking service');
+      setErrorMessage('Network error: Unable to connect to Voice Assistant');
       setConvState('INITIALIZING');
     }
   };
 
-  // ─── Playback Audio with expo-av ──────────────────────────────────────────
-  const speakQuestionAudio = async (sessId, stepNum, type = 'question', lang = language, directUrl = null) => {
+  // ─── Playback Audio with expo-speech (On-Device TTS) ────────────────────────
+  const speakAssistantText = async (textToSpeak, lang = language) => {
     await cleanupAudio();
     if (!isMountedRef.current) return;
 
+    if (!textToSpeak) {
+      handleAudioFinished();
+      return;
+    }
+
     setConvState('ASSISTANT_SPEAKING');
 
-    const audioUrl = directUrl || voiceBookingApi.getAudioUrl(sessId, stepNum, type, lang);
+    const langMap = {
+      mr: 'mr-IN',
+      hi: 'hi-IN',
+      en: 'en-IN'
+    };
+    const voiceLang = langMap[lang] || 'en-IN';
+
+    // Strip markdown formatting for speech
+    const cleanSpoken = textToSpeak
+      .replace(/\*\*/g, '')
+      .replace(/\|/g, ' ')
+      .replace(/#/g, '')
+      .replace(/\[|\]/g, '')
+      .replace(/---+/g, ' ')
+      .trim();
 
     try {
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: audioUrl },
-        { shouldPlay: true },
-        (playbackStatus) => {
-          if (playbackStatus.didJustFinish) {
-            if (isMountedRef.current) {
-              handleAudioFinished();
-            }
+      Speech.stop();
+      Speech.speak(cleanSpoken, {
+        language: voiceLang,
+        rate: 0.95,
+        pitch: 1.0,
+        onDone: () => {
+          if (isMountedRef.current) {
+            handleAudioFinished();
           }
+        },
+        onError: (err) => {
+          console.warn('[VoiceBooking] Speech synthesis error:', err);
+          if (isMountedRef.current) {
+            handleAudioFinished();
+          }
+        },
+        onStopped: () => {
+          // Playback stopped
         }
-      );
-
-      soundRef.current = sound;
+      });
     } catch (err) {
-      console.warn('[VoiceBooking] Audio playback error:', err.message);
+      console.warn('[VoiceBooking] Speech synthesis exception:', err);
       if (isMountedRef.current) {
-        // If TTS playback fails on network or format, gracefully transition to listening
         handleAudioFinished();
       }
     }
@@ -324,12 +363,11 @@ export default function VoiceBookingModal({
       } else {
         setPermissionExplaining(true);
         if (perm.canAskAgain === false) {
-          // Hard permission denial -> immediately unlock manual input
           setShowTypeInput(true);
         } else {
           Alert.alert(
             language === 'mr' ? 'मायक्रोफोन परवानगी आवश्यक' : language === 'hi' ? 'माइक्रोफ़ोन अनुमति आवश्यक' : 'Microphone Permission Required',
-            language === 'mr' ? 'व्हॉईस बुकिंगसाठी मायक्रोफोन परवानगी आवश्यक आहे. कृपया परवानगी द्या किंवा खालील पर्यायातून टाईप करा.' : 'Please enable microphone access to use voice booking, or type instead.'
+            language === 'mr' ? 'व्हॉईस सहाय्यकासाठी मायक्रोफोन परवानगी आवश्यक आहे. कृपया परवानगी द्या किंवा खालील पर्यायातून टाईप करा.' : 'Please enable microphone access to use voice booking, or type instead.'
           );
         }
       }
@@ -373,7 +411,7 @@ export default function VoiceBookingModal({
         web: {}
       });
 
-      // Status update for silence detection / VAD
+      // VAD metering
       recording.setOnRecordingStatusUpdate((status) => {
         if (!status.isRecording) return;
 
@@ -382,7 +420,7 @@ export default function VoiceBookingModal({
           lastSpokenTimeRef.current = Date.now();
         }
 
-        // VAD: Auto-stop after 2 seconds of silence once speech was detected
+        // Auto-stop after 2 seconds of silence
         if (hasSpokenRef.current && (Date.now() - lastSpokenTimeRef.current > 2000)) {
           if (isMountedRef.current && convState === 'LISTENING') {
             stopRecordingAndSubmit();
@@ -446,6 +484,14 @@ export default function VoiceBookingModal({
   const submitTextAnswer = (textToSubmit = manualText) => {
     const text = (textToSubmit || '').trim();
     if (!text) return;
+    setManualText('');
+    setShowTypeInput(false);
+
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', text, timestamp: new Date() }
+    ]);
+
     submitAnswerToBackend({ textAnswer: text, language });
   };
 
@@ -467,16 +513,6 @@ export default function VoiceBookingModal({
     setIsOffline(false);
 
     try {
-      console.log(`[VoiceBooking] Dispatching payload to /api/voice-booking/${sessionId}/answer:`, {
-        type: payloadWithLang.audioUri ? 'multipart/form-data (Native Audio Recording)' : 'textAnswer (Manual Keyed Input)',
-        language: payloadWithLang.language,
-        audioUri: payloadWithLang.audioUri || null,
-        mimeType: payloadWithLang.mimeType || (payloadWithLang.audioUri ? 'audio/m4a' : 'text/plain'),
-        textAnswer: payloadWithLang.textAnswer || null,
-        activeStep: step,
-        consecutiveFailures
-      });
-
       const result = await voiceBookingApi.sendAnswer(sessionId, payloadWithLang);
       if (!isMountedRef.current) return;
 
@@ -484,79 +520,43 @@ export default function VoiceBookingModal({
         throw new Error(result?.message || 'Processing failed');
       }
 
-      // Update transcript if available
-      if (result.rawTranscript || result.extractedValue) {
-        setTranscript(result.rawTranscript || String(result.extractedValue));
+      if (result.transcribedText && !payload.textAnswer) {
+        setTranscript(result.transcribedText);
+        setMessages((prev) => [
+          ...prev,
+          { role: 'user', text: result.transcribedText, timestamp: new Date() }
+        ]);
       }
 
-      if (result.collectedData) {
-        setCollectedData(result.collectedData);
-      }
+      const reply = result.replyText || result.question || 'Done.';
+      const action = result.actionTaken || 'none';
+      const actionData = result.actionResult || null;
 
-      // 1. Flow Completion Check
-      if (result.complete && (result.bookingSummary || result.token)) {
-        setConsecutiveFailures(0);
-        setConvState('COMPLETED');
-        setCompletedResult(result.bookingSummary || result.token);
-        setShowTypeInput(false);
-        return;
-      }
+      setLastActionTaken(action);
+      setLastActionResult(actionData);
 
-      // 2. Retry / Clarification Check
-      if (result.retry || result.status === 'UNCLEAR') {
-        const nextFailures = consecutiveFailures + 1;
-        setConsecutiveFailures(nextFailures);
-        setClarification(result.message || 'Could not understand clearly.');
-
-        // Retry Exhaustion: 2 consecutive unclear audio submissions -> automatically flip to "Type instead"
-        if (nextFailures >= 2 || result.fallbackToManual || result.retriesLeft === 0) {
-          console.log(`[VoiceBooking] Retry Exhaustion Triggered: ${nextFailures} consecutive unclear answers. Automatically flipping UI to 'Type instead' manual input.`);
-          setShowTypeInput(true);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          text: reply,
+          actionTaken: action,
+          actionResult: actionData,
+          timestamp: new Date()
         }
+      ]);
 
-        // Auto-play spoken clarification audio
-        speakQuestionAudio(
-          sessionId,
-          result.step || step,
-          'clarification',
-          language,
-          result.audioUrl
-        );
-        return;
+      if (action === 'book_slot' && (result.token || actionData?.token)) {
+        setCompletedResult(result.token || actionData?.token);
       }
 
-      // 3. Valid Step Completed -> Auto Advance & Reset Failure Count
-      if (result.status === 'VALID' || result.step) {
-        setConsecutiveFailures(0); // Reset consecutive failure counter on valid response
-        setStep(result.nextStepIndex || result.step);
-        setFieldTitle(result.fieldTitle || 'Next Step');
-        setQuestionText(result.question || '');
-        setClarification(null);
-        setShowTypeInput(false);
-        setManualText('');
-
-        // Auto-play the next question
-        speakQuestionAudio(
-          sessionId,
-          result.nextStepIndex || result.step,
-          'question',
-          language,
-          result.audioUrl
-        );
-      }
+      // Auto-play spoken response via on-device Speech
+      speakAssistantText(reply, language);
     } catch (err) {
       console.warn('[VoiceBooking] Answer processing error:', err);
       if (!isMountedRef.current) return;
 
       await cleanupAudio();
-
-      const nextFailures = consecutiveFailures + 1;
-      setConsecutiveFailures(nextFailures);
-      if (nextFailures >= 2) {
-        console.log(`[VoiceBooking] Retry Exhaustion on Network/Processing Error: ${nextFailures} failures. Automatically flipping UI to 'Type instead' manual mode.`);
-        setShowTypeInput(true);
-      }
-
       const isNetworkErr = !err.response || err.code === 'ECONNABORTED' || err.message?.includes('Network');
       if (isNetworkErr) {
         setIsOffline(true);
@@ -578,21 +578,10 @@ export default function VoiceBookingModal({
   // ─── Confirm Booking & Close ───────────────────────────────────────────────
   const handleConfirmFinalBooking = () => {
     if (onBookingConfirmed && completedResult) {
-      onBookingConfirmed(completedResult, collectedData);
+      onBookingConfirmed(completedResult, lastActionResult);
     }
     onClose();
   };
-
-  // UI Helper strings
-  const getFieldKey = () => {
-    if (step === 1) return 'centre';
-    if (step === 2) return 'crop';
-    if (step === 3) return 'quantity';
-    if (step === 4) return 'slot';
-    return 'centre';
-  };
-
-  const currentFieldSuggestions = SUGGESTED_RESPONSES[getFieldKey()] || [];
 
   return (
     <Modal
@@ -611,10 +600,10 @@ export default function VoiceBookingModal({
               </View>
               <View>
                 <Text style={styles.modalTitle}>
-                  {language === 'mr' ? 'स्मार्ट व्हॉईस बुकिंग' : language === 'hi' ? 'स्मार्ट वॉयस बुकिंग' : 'Smart Voice Booking'}
+                  {language === 'mr' ? 'किसान व्हॉइस सहाय्यक' : language === 'hi' ? 'किसान वॉयस सहायक' : 'KisanQ Voice Assistant'}
                 </Text>
                 <Text style={styles.modalSubtitle}>
-                  {language === 'mr' ? 'फक्त बोला आणि टोकन मिळवा' : language === 'hi' ? 'बस बोलिए और टोकन पाइए' : 'Speak naturally to book your slot'}
+                  {language === 'mr' ? 'नैसर्गिक बोला — ७ कृती (Groq AI)' : language === 'hi' ? 'प्राकृतिक बोलें — ७ कार्य' : 'Natural Free-Form Conversation · 7 Actions'}
                 </Text>
               </View>
             </View>
@@ -648,87 +637,42 @@ export default function VoiceBookingModal({
             <OfflineBanner
               onRetry={() => {
                 setIsOffline(false);
-                if (!sessionId) {
-                  startNewSession(language);
-                } else {
-                  speakQuestionAudio(sessionId, step, 'question', language);
-                }
+                startNewSession(language);
               }}
               message={
                 language === 'mr'
                   ? 'इंटरनेट कनेक्शन नाही. कृपया नेटवर्क तपासा.'
-                  : language === 'hi'
-                  ? 'इंटरनेट कनेक्शन नहीं है। कृपया नेटवर्क जांचें।'
                   : 'No internet connection. Please check your network.'
               }
             />
           )}
 
-          <ScrollView style={styles.scrollArea} contentContainerStyle={{ paddingBottom: 20 }}>
-            {/* Step Progress Indicators */}
-            {convState !== 'COMPLETED' && (
-              <View style={styles.stepProgressContainer}>
-                <View style={styles.stepDotsRow}>
-                  {[1, 2, 3, 4].map((s) => {
-                    const isDone = s < step;
-                    const isCurrent = s === step;
-                    return (
-                      <View key={s} style={styles.stepDotWrapper}>
-                        <View
-                          style={[
-                            styles.stepDot,
-                            isDone && styles.stepDotDone,
-                            isCurrent && styles.stepDotCurrent
-                          ]}
-                        >
-                          <Text style={[styles.stepDotText, (isDone || isCurrent) && styles.stepDotTextActive]}>
-                            {isDone ? '✓' : s}
-                          </Text>
-                        </View>
-                        {s < 4 && (
-                          <View
-                            style={[
-                              styles.stepLine,
-                              isDone && styles.stepLineDone
-                            ]}
-                          />
-                        )}
-                      </View>
-                    );
-                  })}
-                </View>
-                <Text style={styles.stepTitleLabel}>
-                  {language === 'mr' ? `टप्पा ${step}/४: ${fieldTitle}` : language === 'hi' ? `चरण ${step}/४: ${fieldTitle}` : `Step ${step}/4: ${fieldTitle}`}
-                </Text>
-              </View>
-            )}
-
-            {/* In-App Pre-Permission Prompt Dialog */}
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.scrollArea}
+            contentContainerStyle={{ paddingBottom: 20 }}
+            onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+          >
+            {/* Permission Prompt Card */}
             {permissionExplaining && (
               <View style={styles.permissionCard}>
                 <Text style={styles.permissionIcon}>🎙️</Text>
                 <Text style={styles.permissionTitle}>
-                  {language === 'mr' ? 'मायक्रोफोन परवानगी आवश्यक' : language === 'hi' ? 'माइक्रोफ़ोन अनुमति आवश्यक' : 'Microphone Access Required'}
+                  {language === 'mr' ? 'मायक्रोफोन परवानगी आवश्यक' : 'Microphone Access Required'}
                 </Text>
                 <Text style={styles.permissionText}>
                   {language === 'mr'
-                    ? 'आपल्या आवाजाने थेट मराठी/हिंदीत माहिती भरण्यासाठी मायक्रोफोन परवानगी आवश्यक आहे. आपण थेट उत्तर टाईप देखील करू शकता.'
-                    : language === 'hi'
-                    ? 'अपनी आवाज़ से सीधे बुकिंग करने के लिए माइक्रोफ़ोन एक्सेस की आवश्यकता है। आप उत्तर टाइप भी कर सकते हैं।'
-                    : 'KisanQ requires microphone access to transcribe your spoken answers into booking details. You can also choose to type manually.'}
+                    ? 'थेट मराठी/हिंदीत बोलण्यासाठी मायक्रोफोन परवानगी द्या किंवा खालील पर्यायातून टाईप करा.'
+                    : 'KisanQ requires microphone access to transcribe your speech. You can also choose to type.'}
                 </Text>
                 <View style={styles.permissionBtnRow}>
                   {canAskAgain !== false ? (
                     <TouchableOpacity style={styles.grantPermBtn} onPress={requestMicPermission} activeOpacity={0.8}>
-                      <Text style={styles.grantPermBtnText}>
-                        {language === 'mr' ? '🎙️ परवानगी द्या / Allow' : language === 'hi' ? '🎙️ अनुमति दें / Allow' : '🎙️ Grant Permission'}
-                      </Text>
+                      <Text style={styles.grantPermBtnText}>🎙️ Allow Mic</Text>
                     </TouchableOpacity>
                   ) : (
                     <TouchableOpacity style={styles.grantPermBtn} onPress={handleOpenSettings} activeOpacity={0.8}>
-                      <Text style={styles.grantPermBtnText}>
-                        {language === 'mr' ? '⚙️ सेटिंग्ज उघडा / Open Settings' : language === 'hi' ? '⚙️ सेटिंग्स खोलें / Open Settings' : '⚙️ Open App Settings'}
-                      </Text>
+                      <Text style={styles.grantPermBtnText}>⚙️ Open Settings</Text>
                     </TouchableOpacity>
                   )}
                   <TouchableOpacity
@@ -739,263 +683,253 @@ export default function VoiceBookingModal({
                     }}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.typeInsteadPermBtnText}>
-                      {language === 'mr' ? '⌨️ टाईप करा / Type Instead' : language === 'hi' ? '⌨️ टाइप करें / Type Instead' : '⌨️ Type Instead'}
-                    </Text>
+                    <Text style={styles.typeInsteadPermBtnText}>⌨️ Type Instead</Text>
                   </TouchableOpacity>
                 </View>
               </View>
             )}
 
-            {/* COMPLETED State: Booking Summary Card */}
-            {convState === 'COMPLETED' ? (
-              <View style={styles.summaryCard}>
-                <View style={styles.summaryBadge}>
-                  <Text style={{ fontSize: 32 }}>🎉</Text>
-                  <Text style={styles.summaryTitle}>
-                    {language === 'mr' ? 'नोंदणी तपशील तयार आहेत!' : language === 'hi' ? 'बुकिंग विवरण तैयार है!' : 'Booking Summary Ready!'}
-                  </Text>
-                  <Text style={styles.summarySubtitle}>
-                    {language === 'mr' ? 'कृपया माहिती तपासून अंतिम टोकन पुष्टी करा.' : language === 'hi' ? 'कृपया विवरण जांचकर अंतिम टोकन की पुष्टि करें।' : 'Please review details and confirm your token.'}
-                  </Text>
-                </View>
-
-                <View style={styles.summaryTable}>
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>🏢 {language === 'mr' ? 'बाजार समिती:' : language === 'hi' ? 'मंडी:' : 'Mandi:'}</Text>
-                    <Text style={styles.summaryValue}>{collectedData.centre || collectedData.mandiName || 'APMC'}</Text>
-                  </View>
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>🌱 {language === 'mr' ? 'शेतमाल:' : language === 'hi' ? 'फसल:' : 'Crop:'}</Text>
-                    <Text style={styles.summaryValue}>{collectedData.crop || 'Soybean'}</Text>
-                  </View>
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>⚖️ {language === 'mr' ? 'अंदाजे वजन:' : language === 'hi' ? 'मात्रा:' : 'Quantity:'}</Text>
-                    <Text style={styles.summaryValue}>{collectedData.quantity ? `${collectedData.quantity} Quintals` : '25 Quintals'}</Text>
-                  </View>
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>⏰ {language === 'mr' ? 'वेळ व दिनांक:' : language === 'hi' ? 'समय स्लॉट:' : 'Time Slot:'}</Text>
-                    <Text style={styles.summaryValue}>{collectedData.slot || 'Tomorrow 08:00 AM - 10:00 AM'}</Text>
-                  </View>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.confirmFinalButton}
-                  onPress={handleConfirmFinalBooking}
-                  activeOpacity={0.8}
+            {/* Conversational Message Stream */}
+            <View style={styles.messageStream}>
+              {messages.map((msg, idx) => (
+                <View
+                  key={idx}
+                  style={[
+                    styles.messageBubbleWrapper,
+                    msg.role === 'user' ? styles.userBubbleWrapper : styles.assistantBubbleWrapper
+                  ]}
                 >
-                  <Text style={styles.confirmFinalButtonText}>
-                    {language === 'mr' ? 'टोकन बुक करा / Book Token' : language === 'hi' ? 'टोकन बुक करें / Book Token' : 'Confirm & Book Token'}
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.restartButton}
-                  onPress={() => startNewSession(language)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.restartButtonText}>
-                    {language === 'mr' ? '🔄 पुन्हा नव्याने बोला' : language === 'hi' ? '🔄 फिर से बोलें' : '🔄 Start Over'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              /* ACTIVE STEP INTERACTION */
-              <View>
-                {/* Question Prompt Bubble */}
-                <View style={styles.questionBubble}>
-                  <View style={styles.bubbleHeader}>
-                    <Text style={styles.assistantTag}>
-                      🤖 {language === 'mr' ? 'किसान सहाय्यक विचारत आहे:' : language === 'hi' ? 'किसान सहायक पूछ रहा है:' : 'Kisan Assistant:'}
+                  <View
+                    style={[
+                      styles.messageBubble,
+                      msg.role === 'user' ? styles.userBubble : styles.assistantBubble
+                    ]}
+                  >
+                    <Text style={styles.messageRoleTag}>
+                      {msg.role === 'user' ? `👨‍🌾 ${farmerName}` : '🤖 KisanQ Assistant'}
                     </Text>
-                    {convState === 'ASSISTANT_SPEAKING' && (
-                      <View style={styles.speakingIndicator}>
-                        <ActivityIndicator size="small" color="#16a34a" />
-                        <Text style={styles.speakingText}>
-                          {language === 'mr' ? 'ऑडिओ बोलत आहे...' : language === 'hi' ? 'ऑडियो बोल रहा है...' : 'Speaking...'}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                  <Text style={styles.questionText}>
-                    {questionText || (language === 'mr' ? 'कृपया प्रतीक्षा करा...' : 'Please wait...')}
-                  </Text>
-                </View>
-
-                {/* Clarification Alert if unclear */}
-                {clarification && (
-                  <View style={styles.clarificationBox}>
-                    <Text style={styles.clarificationIcon}>⚠️</Text>
-                    <Text style={styles.clarificationText}>{clarification}</Text>
-                  </View>
-                )}
-
-                {/* Live Mic Pulsing & Action Area */}
-                <View style={styles.micArea}>
-                  {convState === 'ASSISTANT_SPEAKING' && (
-                    <View style={styles.assistantSpeakingCard}>
-                      <Text style={styles.soundWaveIcon}>🔊</Text>
-                      <Text style={styles.stateCaption}>
-                        {language === 'mr' ? 'प्रश्न ऐका... यानंतर मायक्रोफोन आपोआप सुरू होईल' : language === 'hi' ? 'प्रश्न सुनें... इसके बाद माइक अपने आप शुरू होगा' : 'Listening to question... mic will start automatically'}
-                      </Text>
-                      <TouchableOpacity
-                        style={styles.skipToMicBtn}
-                        onPress={() => {
-                          cleanupAudio();
-                          startRecording();
-                        }}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.skipToMicBtnText}>
-                          {language === 'mr' ? 'थेट बोला ▶' : language === 'hi' ? 'सीधे बोलें ▶' : 'Skip & Speak ▶'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-
-                  {convState === 'LISTENING' && (
-                    <View style={styles.listeningCard}>
-                      <Animated.View style={[styles.pulseCircle, { transform: [{ scale: pulseAnim }] }]}>
-                        <TouchableOpacity
-                          style={styles.bigMicButton}
-                          onPress={stopRecordingAndSubmit}
-                          activeOpacity={0.9}
-                        >
-                          <Text style={{ fontSize: 38 }}>🎙️</Text>
-                        </TouchableOpacity>
-                      </Animated.View>
-                      <Text style={styles.listeningTitle}>
-                        {language === 'mr' ? 'आता बोला... (आम्ही ऐकत आहोत)' : language === 'hi' ? 'अब बोलिए... (हम सुन रहे हैं)' : 'Your turn — speak now...'}
-                      </Text>
-                      <Text style={styles.listeningHint}>
-                        {language === 'mr' ? 'बोलणे झाल्यावर खालील बटण दाबा किंवा थांबा' : language === 'hi' ? 'बोलने के बाद नीचे बटन दबाएं या रुकें' : 'Tap below when finished speaking or pause'}
-                      </Text>
-                      <TouchableOpacity
-                        style={styles.finishSpeakingBtn}
-                        onPress={stopRecordingAndSubmit}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.finishSpeakingBtnText}>
-                          {language === 'mr' ? '✓ बोलणे पूर्ण झाले' : language === 'hi' ? '✓ बोलना पूरा हुआ' : '✓ Done Speaking'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-
-                  {convState === 'PROCESSING' && (
-                    <View style={styles.processingCard}>
-                      <ActivityIndicator size="large" color="#16a34a" style={{ marginBottom: 12 }} />
-                      <Text style={styles.processingTitle}>
-                        {language === 'mr' ? 'आवाज तपासत आहे...' : language === 'hi' ? 'आवाज़ की जांच हो रही है...' : 'Gemini AI Processing...'}
-                      </Text>
-                      <Text style={styles.processingSubtitle}>
-                        {language === 'mr' ? 'कृपया थोडा वेळ थांबा' : language === 'hi' ? 'कृपया कुछ क्षण रुकें' : 'Extracting your booking details'}
-                      </Text>
-                    </View>
-                  )}
-
-                  {convState === 'INITIALIZING' && !permissionExplaining && (
-                    <View style={styles.idleCard}>
-                      <TouchableOpacity
-                        style={styles.restartTurnBtn}
-                        onPress={() => speakQuestionAudio(sessionId, step, 'question', language)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={styles.restartTurnBtnText}>
-                          {language === 'mr' ? '🔊 प्रश्न पुन्हा ऐका' : language === 'hi' ? '🔊 प्रश्न फिर से सुनें' : '🔊 Replay Question'}
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.restartTurnBtn, { backgroundColor: '#16a34a', marginTop: 8 }]}
-                        onPress={startRecording}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={[styles.restartTurnBtnText, { color: '#ffffff' }]}>
-                          {language === 'mr' ? '🎙️ आता बोला' : language === 'hi' ? '🎙️ अब बोलें' : '🎙️ Speak Now'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                </View>
-
-                {/* Error message */}
-                {errorMessage !== '' && (
-                  <View style={styles.errorBox}>
-                    <Text style={styles.errorText}>⚠️ {errorMessage}</Text>
-                  </View>
-                )}
-
-                {/* Live Transcript / Recognized Answer */}
-                {transcript !== '' && (
-                  <View style={styles.transcriptBox}>
-                    <Text style={styles.transcriptLabel}>
-                      {language === 'mr' ? 'ओळखलेला आवाज:' : language === 'hi' ? 'पहचाना गया:' : 'Heard:'}
+                    <Text style={[styles.messageText, msg.role === 'user' && styles.userMessageText]}>
+                      {msg.text}
                     </Text>
-                    <Text style={styles.transcriptValue}>"{transcript}"</Text>
                   </View>
-                )}
 
-                {/* Quick Utterance Suggestions / Tap Assist */}
-                <View style={styles.suggestionsContainer}>
-                  <Text style={styles.suggestionsTitle}>
-                    💡 {language === 'mr' ? 'जलद पर्याय (टॅप करू शकता):' : language === 'hi' ? 'त्वरित विकल्प (टैप कर सकते हैं):' : 'Quick Options (tap to answer):'}
-                  </Text>
-                  <View style={styles.suggestionChipsRow}>
-                    {currentFieldSuggestions.map((item, idx) => {
-                      const textLabel = item[language] || item.mr || item.en;
-                      return (
-                        <TouchableOpacity
-                          key={idx}
-                          style={styles.suggestionChip}
-                          onPress={() => submitTextAnswer(textLabel)}
-                          activeOpacity={0.7}
-                        >
-                          <Text style={styles.suggestionChipText}>{textLabel}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
+                  {/* Embedded Action Result Card */}
+                  {msg.actionResult && (
+                    <View style={styles.embeddedActionCard}>
+                      {/* Booking Card */}
+                      {msg.actionTaken === 'book_slot' && msg.actionResult.tokenNumber && (
+                        <View style={styles.cardContent}>
+                          <Text style={styles.cardTitle}>✅ {language === 'mr' ? 'स्लॉट बुक झाला!' : 'Slot Booked!'}</Text>
+                          <Text style={styles.cardTokenText}>{msg.actionResult.tokenNumber}</Text>
+                          <View style={styles.cardRow}>
+                            <Text style={styles.cardLabel}>Mandi:</Text>
+                            <Text style={styles.cardVal}>{msg.actionResult.mandiName}</Text>
+                          </View>
+                          <View style={styles.cardRow}>
+                            <Text style={styles.cardLabel}>Crop & Qty:</Text>
+                            <Text style={styles.cardVal}>{msg.actionResult.crop} · {msg.actionResult.quantity} Qtl</Text>
+                          </View>
+                          <View style={styles.cardRow}>
+                            <Text style={styles.cardLabel}>Date & Time:</Text>
+                            <Text style={styles.cardVal}>{msg.actionResult.slotDate} ({msg.actionResult.slotTime})</Text>
+                          </View>
+
+                          <TouchableOpacity
+                            style={styles.cardConfirmBtn}
+                            onPress={handleConfirmFinalBooking}
+                            activeOpacity={0.8}
+                          >
+                            <Text style={styles.cardConfirmBtnText}>🎫 {language === 'mr' ? 'टोकन पहा व पुष्टी करा' : 'View & Confirm Token'}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+
+                      {/* Crop Price Card */}
+                      {msg.actionTaken === 'check_crop_price' && (
+                        <View style={styles.cardContent}>
+                          <Text style={styles.cardTitle}>📊 {msg.actionResult.crop} – {msg.actionResult.mandiName}</Text>
+                          <View style={styles.priceRow}>
+                            <View style={styles.priceBox}>
+                              <Text style={styles.priceBoxLabel}>MSP (हमीभाव)</Text>
+                              <Text style={styles.priceBoxVal}>₹{msg.actionResult.statutoryMSP}</Text>
+                            </View>
+                            <View style={styles.priceBox}>
+                              <Text style={styles.priceBoxLabel}>Today (आज)</Text>
+                              <Text style={[styles.priceBoxVal, { color: '#eab308' }]}>₹{msg.actionResult.marketPriceToday}</Text>
+                            </View>
+                          </View>
+                        </View>
+                      )}
+
+                      {/* Queue Status Card */}
+                      {msg.actionTaken === 'check_queue_position' && (
+                        <View style={styles.cardContent}>
+                          <Text style={styles.cardTitle}>⏳ {language === 'mr' ? 'रांगेतील जागा' : 'Queue Position'}</Text>
+                          <Text style={styles.cardBigPosition}>#{msg.actionResult.queuePosition || 1}</Text>
+                          <Text style={styles.cardSubText}>Est. Wait: {msg.actionResult.estimatedWaitTime} · {msg.actionResult.currentStage}</Text>
+                        </View>
+                      )}
+
+                      {/* Token 5-Stage Status Card */}
+                      {msg.actionTaken === 'check_token_status' && (
+                        <View style={styles.cardContent}>
+                          <Text style={styles.cardTitle}>📋 {msg.actionResult.tokenNumber} – {msg.actionResult.currentStageName}</Text>
+                          <Text style={styles.cardSubText}>Stage {msg.actionResult.currentStageIndex}/5 ({msg.actionResult.currentStageStatus})</Text>
+                        </View>
+                      )}
+
+                      {/* Payout Card */}
+                      {msg.actionTaken === 'check_payout_status' && (
+                        <View style={styles.cardContent}>
+                          <Text style={styles.cardTitle}>💰 {language === 'mr' ? 'डीबीटी पेमेंट तपशील' : 'DBT Payout Summary'}</Text>
+                          <Text style={styles.cardTokenText}>{msg.actionResult.totalPayoutAmount}</Text>
+                          <Text style={styles.cardSubText}>{msg.actionResult.netWeightQuintals} Qtl · {msg.actionResult.crop}</Text>
+                        </View>
+                      )}
+
+                      {/* Support Card */}
+                      {msg.actionTaken === 'get_support_info' && (
+                        <View style={styles.cardContent}>
+                          <Text style={styles.cardTitle}>📞 KisanQ Support (24x7)</Text>
+                          <TouchableOpacity
+                            style={styles.callBtn}
+                            onPress={() => Linking.openURL(`tel:${msg.actionResult.helplineTollFree}`)}
+                          >
+                            <Text style={styles.callBtnText}>📞 Call {msg.actionResult.helplineDisplay}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
+                  )}
                 </View>
+              ))}
+            </View>
 
-                {/* "Type Instead" Fallback Input */}
-                <View style={styles.typeInsteadContainer}>
-                  {!showTypeInput ? (
+            {/* Central Mic & Turn Visualizer */}
+            <View style={styles.micArea}>
+              {convState === 'ASSISTANT_SPEAKING' && (
+                <View style={styles.assistantSpeakingCard}>
+                  <Text style={styles.soundWaveIcon}>🔊</Text>
+                  <Text style={styles.stateCaption}>
+                    {language === 'mr' ? 'AI सहाय्यक बोलत आहे...' : 'AI Assistant is speaking...'}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.skipToMicBtn}
+                    onPress={() => {
+                      cleanupAudio();
+                      startRecording();
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.skipToMicBtnText}>
+                      {language === 'mr' ? 'थेट बोला ▶' : 'Skip & Speak ▶'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {convState === 'LISTENING' && (
+                <View style={styles.listeningCard}>
+                  <Animated.View style={[styles.pulseCircle, { transform: [{ scale: pulseAnim }] }]}>
                     <TouchableOpacity
-                      style={styles.typeInsteadToggle}
-                      onPress={() => setShowTypeInput(true)}
-                      activeOpacity={0.7}
+                      style={styles.bigMicButton}
+                      onPress={stopRecordingAndSubmit}
+                      activeOpacity={0.9}
                     >
-                      <Text style={styles.typeInsteadToggleText}>
-                        ⌨️ {language === 'mr' ? 'टाईप करायचे आहे का? (Type instead)' : language === 'hi' ? 'टाइप करना चाहते हैं? (Type instead)' : 'Prefer to type instead?'}
-                      </Text>
+                      <Text style={{ fontSize: 36 }}>🎙️</Text>
                     </TouchableOpacity>
-                  ) : (
-                    <View style={styles.typeInputBox}>
-                      <Text style={styles.typeInputLabel}>
-                        {language === 'mr' ? 'उत्तर टाईप करा:' : language === 'hi' ? 'उत्तर टाइप करें:' : 'Type answer for this field:'}
-                      </Text>
-                      <View style={styles.typeInputRow}>
-                        <TextInput
-                          style={styles.typeTextInput}
-                          placeholder={language === 'mr' ? 'उदा. कोपरगाव, सोयाबीन, 25...' : 'e.g. Kopargaon, Soybean, 25...'}
-                          value={manualText}
-                          onChangeText={setManualText}
-                          placeholderTextColor="#94a3b8"
-                        />
-                        <TouchableOpacity
-                          style={[styles.typeSubmitBtn, !manualText.trim() && styles.typeSubmitBtnDisabled]}
-                          onPress={() => submitTextAnswer()}
-                          disabled={!manualText.trim()}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={styles.typeSubmitBtnText}>➔</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  )}
+                  </Animated.View>
+                  <Text style={styles.listeningTitle}>
+                    {language === 'mr' ? 'आता बोला... (आम्ही ऐकत आहोत)' : 'Speak naturally now...'}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.finishSpeakingBtn}
+                    onPress={stopRecordingAndSubmit}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.finishSpeakingBtnText}>
+                      {language === 'mr' ? '✓ बोलणे पूर्ण झाले' : '✓ Done Speaking'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
+              )}
+
+              {convState === 'PROCESSING' && (
+                <View style={styles.processingCard}>
+                  <ActivityIndicator size="large" color="#16a34a" style={{ marginBottom: 10 }} />
+                  <Text style={styles.processingTitle}>Groq AI Reasoning & Tool Execution...</Text>
+                </View>
+              )}
+
+              {convState === 'INITIALIZING' && !permissionExplaining && (
+                <View style={styles.idleCard}>
+                  <TouchableOpacity
+                    style={[styles.restartTurnBtn, { backgroundColor: '#16a34a' }]}
+                    onPress={startRecording}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.restartTurnBtnText, { color: '#ffffff' }]}>
+                      {language === 'mr' ? '🎙️ आता बोला' : '🎙️ Speak Now'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+
+            {/* Error message */}
+            {errorMessage !== '' && (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorText}>⚠️ {errorMessage}</Text>
               </View>
             )}
+
+            {/* Quick Action Prompt Chips */}
+            <View style={styles.suggestionsContainer}>
+              <View style={styles.quickHeaderRow}>
+                <Text style={styles.suggestionsTitle}>
+                  💡 {language === 'mr' ? 'जलद पर्याय (टॅप करू शकता):' : 'Quick Actions (1-Tap):'}
+                </Text>
+                <TouchableOpacity onPress={() => setShowTypeInput(!showTypeInput)}>
+                  <Text style={styles.typeToggleText}>{showTypeInput ? 'Hide Keyboard' : '⌨️ Type instead'}</Text>
+                </TouchableOpacity>
+              </View>
+
+              {showTypeInput ? (
+                <View style={styles.typeInputRow}>
+                  <TextInput
+                    style={styles.typeTextInput}
+                    placeholder={language === 'mr' ? 'उदा. कोपरगावला २५ क्विंटल सोयाबीन बुक करा…' : 'Type e.g. Book 25 Qtl Soybean slot…'}
+                    value={manualText}
+                    onChangeText={setManualText}
+                    placeholderTextColor="#94a3b8"
+                  />
+                  <TouchableOpacity
+                    style={[styles.typeSubmitBtn, !manualText.trim() && styles.typeSubmitBtnDisabled]}
+                    onPress={() => submitTextAnswer()}
+                    disabled={!manualText.trim()}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.typeSubmitBtnText}>➔</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.suggestionChipsRow}>
+                  {ACTION_PROMPTS.map((item) => {
+                    const textLabel = item[language] || item.mr || item.en;
+                    return (
+                      <TouchableOpacity
+                        key={item.id}
+                        style={styles.suggestionChip}
+                        onPress={() => submitTextAnswer(textLabel)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.suggestionChipText}>{textLabel}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
           </ScrollView>
         </View>
       </View>
@@ -1016,7 +950,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 16,
     maxHeight: '92%',
-    minHeight: '65%',
+    minHeight: '70%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -3 },
     shadowOpacity: 0.15,
@@ -1027,7 +961,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12
+    marginBottom: 10
   },
   titleWithIcon: {
     flexDirection: 'row',
@@ -1044,7 +978,7 @@ const styles = StyleSheet.create({
     marginRight: 10
   },
   modalTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     color: '#0f172a'
   },
@@ -1067,12 +1001,12 @@ const styles = StyleSheet.create({
   },
   langRow: {
     flexDirection: 'row',
-    marginBottom: 12,
+    marginBottom: 10,
     gap: 6
   },
   langChip: {
     flex: 1,
-    paddingVertical: 6,
+    paddingVertical: 5,
     paddingHorizontal: 8,
     borderRadius: 20,
     backgroundColor: '#f1f5f9',
@@ -1096,280 +1030,261 @@ const styles = StyleSheet.create({
   scrollArea: {
     flexGrow: 1
   },
-  stepProgressContainer: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 12,
+  messageStream: {
+    marginBottom: 12
+  },
+  messageBubbleWrapper: {
+    marginBottom: 10
+  },
+  userBubbleWrapper: {
+    alignItems: 'flex-end'
+  },
+  assistantBubbleWrapper: {
+    alignItems: 'flex-start'
+  },
+  messageBubble: {
+    borderRadius: 16,
+    padding: 12,
+    maxWidth: '85%'
+  },
+  userBubble: {
+    backgroundColor: '#16a34a',
+    borderBottomRightRadius: 2
+  },
+  assistantBubble: {
+    backgroundColor: '#f1f5f9',
+    borderBottomLeftRadius: 2,
     borderWidth: 1,
     borderColor: '#e2e8f0'
   },
-  stepDotsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 6
-  },
-  stepDotWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center'
-  },
-  stepDot: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#e2e8f0',
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  stepDotDone: {
-    backgroundColor: '#16a34a'
-  },
-  stepDotCurrent: {
-    backgroundColor: '#f59e0b',
-    borderWidth: 2,
-    borderColor: '#b45309'
-  },
-  stepDotText: {
-    fontSize: 11,
+  messageRoleTag: {
+    fontSize: 10,
     fontWeight: '700',
+    color: '#64748b',
+    marginBottom: 2
+  },
+  messageText: {
+    fontSize: 12,
+    color: '#1e293b',
+    lineHeight: 18
+  },
+  userMessageText: {
+    color: '#ffffff',
+    fontWeight: '600'
+  },
+  embeddedActionCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 14,
+    padding: 10,
+    marginTop: 6,
+    width: '90%'
+  },
+  cardContent: {
+    gap: 4
+  },
+  cardTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a'
+  },
+  cardTokenText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#16a34a'
+  },
+  cardRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 2
+  },
+  cardLabel: {
+    fontSize: 11,
     color: '#64748b'
   },
-  stepDotTextActive: {
-    color: '#ffffff'
-  },
-  stepLine: {
-    width: 32,
-    height: 2,
-    backgroundColor: '#e2e8f0',
-    marginHorizontal: 4
-  },
-  stepLineDone: {
-    backgroundColor: '#16a34a'
-  },
-  stepTitleLabel: {
-    textAlign: 'center',
-    fontSize: 12,
+  cardVal: {
+    fontSize: 11,
     fontWeight: '700',
     color: '#0f172a'
   },
-  questionBubble: {
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 12
-  },
-  bubbleHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6
-  },
-  assistantTag: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#15803d'
-  },
-  speakingIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4
-  },
-  speakingText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#16a34a'
-  },
-  questionText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#0f172a',
-    lineHeight: 22
-  },
-  clarificationBox: {
-    backgroundColor: '#fffbeb',
-    borderWidth: 1,
-    borderColor: '#fde68a',
+  cardConfirmBtn: {
+    backgroundColor: '#16a34a',
+    paddingVertical: 8,
     borderRadius: 10,
-    padding: 10,
-    marginBottom: 12,
+    alignItems: 'center',
+    marginTop: 6
+  },
+  cardConfirmBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800'
+  },
+  priceRow: {
     flexDirection: 'row',
+    gap: 8,
+    marginTop: 4
+  },
+  priceBox: {
+    flex: 1,
+    backgroundColor: '#e2e8f0',
+    padding: 6,
+    borderRadius: 8,
     alignItems: 'center'
   },
-  clarificationIcon: {
-    fontSize: 16,
-    marginRight: 8
+  priceBoxLabel: {
+    fontSize: 9,
+    color: '#64748b'
   },
-  clarificationText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#92400e',
-    flex: 1
-  },
-  micArea: {
-    alignItems: 'center',
-    marginVertical: 10
-  },
-  assistantSpeakingCard: {
-    alignItems: 'center',
-    padding: 14,
-    backgroundColor: '#f8fafc',
-    borderRadius: 16,
-    width: '100%',
-    borderWidth: 1,
-    borderColor: '#e2e8f0'
-  },
-  soundWaveIcon: {
-    fontSize: 32,
-    marginBottom: 6
-  },
-  stateCaption: {
-    fontSize: 12,
-    color: '#64748b',
-    textAlign: 'center',
-    marginBottom: 10
-  },
-  skipToMicBtn: {
-    backgroundColor: '#e2e8f0',
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 16
-  },
-  skipToMicBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#334155'
-  },
-  listeningCard: {
-    alignItems: 'center',
-    width: '100%'
-  },
-  pulseCircle: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    backgroundColor: '#fee2e2',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12
-  },
-  bigMicButton: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: '#ef4444',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#ef4444',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 6
-  },
-  listeningTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#b91c1c',
-    marginBottom: 2
-  },
-  listeningHint: {
-    fontSize: 11,
-    color: '#64748b',
-    marginBottom: 12
-  },
-  finishSpeakingBtn: {
-    backgroundColor: '#16a34a',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 24,
-    shadowColor: '#16a34a',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3
-  },
-  finishSpeakingBtnText: {
+  priceBoxVal: {
     fontSize: 13,
     fontWeight: '800',
-    color: '#ffffff'
+    color: '#16a34a'
   },
-  processingCard: {
-    alignItems: 'center',
-    padding: 20,
-    backgroundColor: '#f8fafc',
-    borderRadius: 16,
-    width: '100%'
+  cardBigPosition: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#eab308'
   },
-  processingTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#15803d'
-  },
-  processingSubtitle: {
+  cardSubText: {
     fontSize: 11,
     color: '#64748b'
   },
-  idleCard: {
+  callBtn: {
+    backgroundColor: '#0284c7',
+    paddingVertical: 6,
+    borderRadius: 8,
     alignItems: 'center',
-    width: '100%'
+    marginTop: 4
+  },
+  callBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  micArea: {
+    marginVertical: 10
+  },
+  assistantSpeakingCard: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#86efac',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 12,
+    alignItems: 'center'
+  },
+  soundWaveIcon: {
+    fontSize: 24,
+    marginBottom: 4
+  },
+  stateCaption: {
+    fontSize: 12,
+    color: '#166534',
+    fontWeight: '600'
+  },
+  skipToMicBtn: {
+    marginTop: 6,
+    backgroundColor: '#16a34a',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 12
+  },
+  skipToMicBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  listeningCard: {
+    alignItems: 'center',
+    paddingVertical: 8
+  },
+  pulseCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#fee2e2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8
+  },
+  bigMicButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#dc2626',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  listeningTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#b91c1c',
+    marginBottom: 6
+  },
+  finishSpeakingBtn: {
+    backgroundColor: '#1e293b',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 16
+  },
+  finishSpeakingBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  processingCard: {
+    alignItems: 'center',
+    paddingVertical: 12
+  },
+  processingTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#16a34a'
+  },
+  idleCard: {
+    alignItems: 'center'
   },
   restartTurnBtn: {
-    backgroundColor: '#f1f5f9',
-    paddingVertical: 8,
     paddingHorizontal: 16,
-    borderRadius: 18,
-    width: '80%',
-    alignItems: 'center'
+    paddingVertical: 8,
+    borderRadius: 16
   },
   restartTurnBtnText: {
     fontSize: 12,
-    fontWeight: '700',
-    color: '#334155'
+    fontWeight: '700'
   },
   errorBox: {
     backgroundColor: '#fef2f2',
+    borderColor: '#fca5a5',
     borderWidth: 1,
-    borderColor: '#fecaca',
-    borderRadius: 8,
     padding: 8,
-    marginVertical: 6
+    borderRadius: 10,
+    marginBottom: 8
   },
   errorText: {
-    fontSize: 11,
-    color: '#b91c1c',
-    fontWeight: '600'
-  },
-  transcriptBox: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    padding: 8,
-    marginVertical: 6,
-    flexDirection: 'row',
-    alignItems: 'center'
-  },
-  transcriptLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748b',
-    marginRight: 6
-  },
-  transcriptValue: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#0f172a',
-    flex: 1
+    color: '#991b1b',
+    fontSize: 11
   },
   suggestionsContainer: {
-    marginTop: 8,
-    marginBottom: 10
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    paddingTop: 10
+  },
+  quickHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8
   },
   suggestionsTitle: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#64748b',
-    marginBottom: 6
+    color: '#64748b'
+  },
+  typeToggleText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#16a34a'
   },
   suggestionChipsRow: {
     flexDirection: 'row',
@@ -1378,42 +1293,16 @@ const styles = StyleSheet.create({
   },
   suggestionChip: {
     backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    paddingVertical: 6,
     paddingHorizontal: 10,
-    borderRadius: 14
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0'
   },
   suggestionChipText: {
     fontSize: 11,
-    fontWeight: '600',
-    color: '#334155'
-  },
-  typeInsteadContainer: {
-    marginTop: 4,
-    marginBottom: 10
-  },
-  typeInsteadToggle: {
-    alignItems: 'center',
-    paddingVertical: 6
-  },
-  typeInsteadToggleText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#16a34a'
-  },
-  typeInputBox: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: '#cbd5e1'
-  },
-  typeInputLabel: {
-    fontSize: 11,
-    fontWeight: '700',
     color: '#334155',
-    marginBottom: 6
+    fontWeight: '600'
   },
   typeInputRow: {
     flexDirection: 'row',
@@ -1421,162 +1310,84 @@ const styles = StyleSheet.create({
   },
   typeTextInput: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#cbd5e1',
-    borderRadius: 8,
-    paddingHorizontal: 10,
+    borderRadius: 12,
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    fontSize: 13,
+    fontSize: 12,
     color: '#0f172a'
   },
   typeSubmitBtn: {
     backgroundColor: '#16a34a',
-    width: 38,
-    height: 38,
-    borderRadius: 8,
+    width: 36,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center'
   },
   typeSubmitBtnDisabled: {
-    backgroundColor: '#94a3b8'
+    opacity: 0.5
   },
   typeSubmitBtnText: {
     color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '800'
+    fontSize: 14,
+    fontWeight: '900'
   },
   permissionCard: {
-    backgroundColor: '#eff6ff',
+    backgroundColor: '#f8fafc',
+    padding: 12,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'center',
-    marginBottom: 12
+    borderColor: '#e2e8f0',
+    marginBottom: 10
   },
   permissionIcon: {
-    fontSize: 28,
-    marginBottom: 6
+    fontSize: 22,
+    textAlign: 'center',
+    marginBottom: 4
   },
   permissionTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
-    color: '#1e40af',
+    textAlign: 'center',
+    color: '#0f172a',
     marginBottom: 4
   },
   permissionText: {
     fontSize: 11,
-    color: '#1e3a8a',
+    color: '#64748b',
     textAlign: 'center',
-    marginBottom: 10,
-    lineHeight: 16
+    marginBottom: 8
   },
   permissionBtnRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
-    marginTop: 4
+    gap: 6
   },
   grantPermBtn: {
-    backgroundColor: '#2563eb',
-    paddingVertical: 9,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    shadowColor: '#2563eb',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3
+    flex: 1,
+    backgroundColor: '#16a34a',
+    paddingVertical: 8,
+    borderRadius: 10,
+    alignItems: 'center'
   },
   grantPermBtnText: {
     color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '800'
+    fontSize: 11,
+    fontWeight: '700'
   },
   typeInsteadPermBtn: {
-    backgroundColor: '#ffffff',
-    borderWidth: 1.5,
-    borderColor: '#cbd5e1',
+    flex: 1,
+    backgroundColor: '#f1f5f9',
     paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 14
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#cbd5e1'
   },
   typeInsteadPermBtnText: {
     color: '#334155',
-    fontSize: 12,
-    fontWeight: '700'
-  },
-  summaryCard: {
-    paddingVertical: 8
-  },
-  summaryBadge: {
-    alignItems: 'center',
-    marginBottom: 14
-  },
-  summaryTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#15803d',
-    marginTop: 6
-  },
-  summarySubtitle: {
     fontSize: 11,
-    color: '#64748b',
-    textAlign: 'center'
-  },
-  summaryTable: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 14,
-    gap: 8
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-    paddingBottom: 6
-  },
-  summaryLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#475569'
-  },
-  summaryValue: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0f172a'
-  },
-  confirmFinalButton: {
-    backgroundColor: '#16a34a',
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginBottom: 8,
-    shadowColor: '#16a34a',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3
-  },
-  confirmFinalButtonText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '800'
-  },
-  restartButton: {
-    paddingVertical: 8,
-    alignItems: 'center'
-  },
-  restartButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#64748b'
+    fontWeight: '700'
   }
 });

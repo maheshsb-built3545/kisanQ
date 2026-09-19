@@ -1,3 +1,12 @@
+const dns = require('dns');
+// Force Node to use Google and Cloudflare public DNS for reliable Atlas SRV resolution
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1']);
+  dns.setDefaultResultOrder('ipv4first');
+} catch (e) {
+  // Ignore if unsupported in environment
+}
+
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
@@ -20,16 +29,17 @@ const authService = require('./services/authService');
 const centreService = require('./services/centreService');
 const cropPriceService = require('./services/cropPriceService');
 
-// Connect to Database & Seed Administrative Staff, Official APMC Centres, and Crop Prices
+// Connect to Database & Seed Administrative Staff, Official APMC Centres, and Crop Prices once
 connectDB().then(() => {
   authService.seedStaffRegistry().catch((err) => logger.warn(`Staff seed notice: ${err.message}`));
   centreService.ensureOfficialCentres().catch((err) => logger.warn(`Centre sync notice: ${err.message}`));
   cropPriceService.seedCropPrices().catch((err) => logger.warn(`Crop price sync notice: ${err.message}`));
+}).catch(() => {
+  // Prime in-memory fallbacks only if DB connection is unavailable
+  authService.seedStaffRegistry().catch(() => {});
+  centreService.ensureOfficialCentres().catch(() => {});
+  cropPriceService.seedCropPrices().catch(() => {});
 });
-// Prime in-memory fallbacks immediately
-authService.seedStaffRegistry().catch(() => {});
-centreService.ensureOfficialCentres().catch(() => {});
-cropPriceService.seedCropPrices().catch(() => {});
 
 
 // CORS Configuration - Permissive for dev and Vite frontend ports
@@ -101,6 +111,15 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   logger.error(`Unhandled Error: ${err.message}`, { stack: err.stack });
   return errorResponse(res, 'Internal server error', 500, process.env.NODE_ENV === 'development' ? err.message : null);
+});
+
+// Process-level unhandled exception & rejection safety guards
+process.on('unhandledRejection', (reason) => {
+  logger.error(`[Process] Unhandled Promise Rejection: ${reason?.message || reason}`, { stack: reason?.stack });
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error(`[Process] Uncaught Exception: ${err.message}`, { stack: err.stack });
 });
 
 const PORT = process.env.PORT || 5000;

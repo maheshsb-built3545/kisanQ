@@ -3,18 +3,21 @@ import {
   Mic, MicOff, Volume2, VolumeX, X, CheckCircle2, AlertCircle,
   Loader2, Building2, Leaf, Clock, Banknote, Sparkles,
   Ticket, ArrowRight, RotateCcw, ShieldCheck, ChevronRight,
-  Radio, Check, Play, Send, MessageSquare
+  Radio, Check, Play, Send, MessageSquare, Phone, HelpCircle,
+  TrendingUp, TrendingDown, Scale, UserCheck, XCircle, ArrowUpRight
 } from 'lucide-react';
 import { voiceBookingApi } from '../../api/voiceBooking.api';
 
 /**
- * ─── Fully Conversational Trilingual Voice Booking Modal ────────────────────
- * Features automatic conversational turn-taking:
- * 1. Question audio auto-plays immediately upon entering step.
- * 2. When audio finishes, mic automatically activates with "Your turn — speak now".
- * 3. Farmer speaks -> audio is processed by Gemini multimodal AI.
- * 4. Next question immediately auto-plays with zero manual clicks.
- * 5. Clarification retries also auto-play spoken audio.
+ * ─── Free-Form Conversational Voice Assistant Modal (Groq Tool-Calling) ─────
+ * Supports 7 core farmer actions:
+ * 1. Book a slot (Mandi, crop, quantity, arrival date/time)
+ * 2. Cancel a booking (Checks penalty and releases queue slot)
+ * 3. Check live queue position & wait time
+ * 4. Check today's crop MSP & mandi market rate
+ * 5. Check token 5-stage status (Gate -> Quality -> Weighbridge -> Procurement -> Payout)
+ * 6. Check payout & DBT payment status
+ * 7. Help & Helpline info (Toll-Free 1800-123-54726, WhatsApp)
  */
 export default function VoiceBookingModal({
   isOpen,
@@ -29,18 +32,15 @@ export default function VoiceBookingModal({
   hasActiveBooking,
   activeToken
 }) {
-  // Session & Step State
+  // Conversational State
   const [language, setLanguage] = useState('mr'); // 'mr' | 'hi' | 'en'
   const [sessionId, setSessionId] = useState(null);
-  const [step, setStep] = useState(1);
-  const [totalSteps, setTotalSteps] = useState(4);
-  const [fieldTitle, setFieldTitle] = useState('Procurement Centre');
-  const [questionText, setQuestionText] = useState('');
-  const [collectedData, setCollectedData] = useState({});
+  const [messages, setMessages] = useState([]);
   const [transcript, setTranscript] = useState('');
-  const [clarification, setClarification] = useState(null);
+  const [lastActionResult, setLastActionResult] = useState(null);
+  const [lastActionTaken, setLastActionTaken] = useState('none');
 
-  // Conversational Interaction State:
+  // Interaction State:
   // 'INITIALIZING' | 'ASSISTANT_SPEAKING' | 'LISTENING' | 'PROCESSING' | 'COMPLETED'
   const [convState, setConvState] = useState('INITIALIZING');
   const [audioError, setAudioError] = useState(null);
@@ -55,13 +55,13 @@ export default function VoiceBookingModal({
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const audioChunksRef = useRef([]);
-  const audioPlayerRef = useRef(null);
   const isComponentMountedRef = useRef(true);
   const hardSafetyTimeoutRef = useRef(null);
   const vadIntervalRef = useRef(null);
   const audioContextRef = useRef(null);
   const hasSpokenRef = useRef(false);
   const lastSpokenTimeRef = useRef(0);
+  const chatBottomRef = useRef(null);
 
   const LANGUAGES = [
     { code: 'mr', name: 'मराठी', label: 'Marathi', voiceCode: 'mr-IN' },
@@ -69,35 +69,68 @@ export default function VoiceBookingModal({
     { code: 'en', name: 'English', label: 'English', voiceCode: 'en-IN' }
   ];
 
-  // Quick utterance suggestions for instant demo / tap fallback
-  const SUGGESTED_RESPONSES = {
-    centre: [
-      { mr: 'कोपरगाव बाजार समिती', hi: 'कोपरगांव मंडी', en: 'APMC Kopargaon' },
-      { mr: 'शिर्डी कृषी केंद्र', hi: 'शिर्डी मंडी', en: 'APMC Shirdi' },
-      { mr: 'राहाता बाजार समिती', hi: 'राहाता मंडी', en: 'APMC Rahata' },
-      { mr: 'वैजापूर मंडी', hi: 'वैजापुर मंडी', en: 'APMC Vaijapur' }
-    ],
-    crop: [
-      { mr: 'सोयाबीन', hi: 'सोयाबीन', en: 'Soybean' },
-      { mr: 'कापूस', hi: 'कपास', en: 'Cotton' },
-      { mr: 'गहू', hi: 'गेहूं', en: 'Wheat' },
-      { mr: 'कांदा', hi: 'प्याज', en: 'Onion' }
-    ],
-    quantity: [
-      { mr: 'पंचवीस क्विंटल', hi: 'पच्चीस क्विंटल', en: '25 Quintals' },
-      { mr: 'पन्नास क्विंटल', hi: 'पचास क्विंटल', en: '50 Quintals' },
-      { mr: 'दहा क्विंटल', hi: 'दस क्विंटल', en: '10 Quintals' },
-      { mr: 'शंभर क्विंटल', hi: 'सौ क्विंटल', en: '100 Quintals' }
-    ],
-    slot: [
-      { mr: 'उद्या सकाळी', hi: 'कल सुबह', en: 'Tomorrow morning' },
-      { mr: 'आज दुपारी', hi: 'आज दोपहर', en: 'Today midday' },
-      { mr: 'उद्या दुपारी', hi: 'कल दोपहर', en: 'Tomorrow afternoon' }
-    ]
-  };
+  // Quick Action Prompt Suggestions
+  const ACTION_PROMPTS = [
+    {
+      id: 'book',
+      mr: '🎙️ कोपरगावला २५ क्विंटल सोयाबीन स्लॉट बुक करा',
+      hi: '🎙️ कोपरगांव में २५ क्विंटल सोयाबीन स्लॉट बुक करें',
+      en: '🎙️ Book 25 Qtl Soybean slot at Kopargaon',
+      action: 'book_slot'
+    },
+    {
+      id: 'price',
+      mr: '📊 आजचा सोयाबीन आणि कापूस हमीभाव किती आहे?',
+      hi: '📊 आज का सोयाबीन और कपास का भाव क्या है?',
+      en: '📊 Check today\'s Soybean & Cotton MSP',
+      action: 'check_crop_price'
+    },
+    {
+      id: 'queue',
+      mr: '⏳ माझी रांगेतील जागा आणि वेळ तपासा',
+      hi: '⏳ मेरी कतार की स्थिति और समय जांचें',
+      en: '⏳ Check my live queue wait time',
+      action: 'check_queue_position'
+    },
+    {
+      id: 'status',
+      mr: '🔍 माझे टोकन कोणत्या टप्प्यावर आहे?',
+      hi: '🔍 मेरा टोकन किस चरण पर है?',
+      en: '🔍 Check my token 5-stage progress',
+      action: 'check_token_status'
+    },
+    {
+      id: 'payout',
+      mr: '💰 माझे डीबीटी पेमेंट जमा झाले आहे का?',
+      hi: '💰 मेरा भुगतान / डीबीटी चेक करें',
+      en: '💰 Check payout & DBT payment status',
+      action: 'check_payout_status'
+    },
+    {
+      id: 'cancel',
+      mr: '❌ माझे बुकिंग रद्द करा',
+      hi: '❌ मेरी बुकिंग रद्द करें',
+      en: '❌ Cancel my booking slot',
+      action: 'cancel_booking'
+    },
+    {
+      id: 'help',
+      mr: '📞 किसान हेल्पलाईन आणि व्हॉट्सअॅप नंबर',
+      hi: '📞 हेल्पलाइन और व्हाट्सएप सहायता',
+      en: '📞 Help, Helpline & WhatsApp Support',
+      action: 'get_support_info'
+    }
+  ];
 
-  // ─── Browser Native / Steerable Gemini TTS Audio Player ───────────────────
-  const speakText = useCallback((text, stepNum = 1, langCode = language, audioUrlOverride = null, onComplete = () => {}) => {
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    if (chatBottomRef.current) {
+      chatBottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, convState]);
+
+  // ─── Browser Native Speech Synthesis (On-Device TTS) ───────────────────
+  const speakText = useCallback((text, langCode = language, onComplete = () => {}) => {
     if (!text || typeof window === 'undefined') {
       onComplete();
       return;
@@ -105,15 +138,8 @@ export default function VoiceBookingModal({
 
     setConvState('ASSISTANT_SPEAKING');
 
-    // Cancel any ongoing audio or speech synthesis
     if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
-    }
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.pause();
-      audioPlayerRef.current.currentTime = 0;
-      audioPlayerRef.current.onended = null;
-      audioPlayerRef.current.onerror = null;
     }
 
     let completed = false;
@@ -126,91 +152,65 @@ export default function VoiceBookingModal({
       }
     };
 
-    // Helper for Web Speech Synthesis fallback
-    const fallbackWebSpeech = () => {
-      if (window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined') {
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = langCode === 'mr' ? 'mr-IN' : langCode === 'hi' ? 'hi-IN' : 'en-IN';
-        utterance.rate = 0.95;
-        utterance.pitch = 1.0;
+    if (window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined') {
+      // Clean markdown bold/table characters for spoken utterance
+      const cleanSpoken = text
+        .replace(/\*\*/g, '')
+        .replace(/\|/g, ' ')
+        .replace(/#/g, '')
+        .replace(/\[|\]/g, '')
+        .replace(/---+/g, ' ')
+        .trim();
 
-        const voices = window.speechSynthesis.getVoices();
-        const matchedVoice = voices.find((v) =>
-          v.lang === utterance.lang || v.lang.startsWith(langCode)
-        );
-        if (matchedVoice) {
-          utterance.voice = matchedVoice;
-        }
+      const utterance = new SpeechSynthesisUtterance(cleanSpoken);
+      utterance.lang = langCode === 'mr' ? 'mr-IN' : langCode === 'hi' ? 'hi-IN' : 'en-IN';
+      utterance.rate = 0.95;
+      utterance.pitch = 1.0;
 
-        utterance.onend = handleSpeechEnd;
-        utterance.onerror = (e) => {
-          console.warn('[VoiceBooking] Speech synthesis error:', e);
-          handleSpeechEnd();
-        };
-
-        try {
-          window.speechSynthesis.speak(utterance);
-          const words = text.split(' ').length;
-          const estimatedDurationMs = Math.max(2500, words * 450);
-          setTimeout(handleSpeechEnd, estimatedDurationMs + 1000);
-          return;
-        } catch (e) {
-          console.warn('[VoiceBooking] SpeechSynthesis speak exception:', e);
-        }
+      const voices = window.speechSynthesis.getVoices();
+      const matchedVoice = voices.find((v) =>
+        v.lang === utterance.lang || v.lang.startsWith(langCode)
+      );
+      if (matchedVoice) {
+        utterance.voice = matchedVoice;
       }
-      handleSpeechEnd();
-    };
 
-    // Attempt 1: Steerable Gemini TTS from backend audio endpoint / pre-rendered sample
-    try {
-      const audioUrl = audioUrlOverride || (sessionId
-        ? voiceBookingApi.getAudioUrl(sessionId, stepNum, 'question', langCode)
-        : `/tts-samples/step_${langCode}_${stepNum}.wav`);
-
-      const audio = new Audio(audioUrl);
-      audioPlayerRef.current = audio;
-
-      audio.onended = handleSpeechEnd;
-      audio.onerror = () => {
-        console.warn('[VoiceBooking] Audio player network error, falling back to Web Speech synthesis...');
-        fallbackWebSpeech();
+      utterance.onend = handleSpeechEnd;
+      utterance.onerror = (e) => {
+        console.warn('[VoiceBooking] Speech synthesis error:', e);
+        handleSpeechEnd();
       };
 
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((e) => {
-          console.warn('[VoiceBooking] Audio play prevented/error:', e);
-          fallbackWebSpeech();
-        });
+      try {
+        window.speechSynthesis.speak(utterance);
+        const words = cleanSpoken.split(' ').length;
+        const estimatedDurationMs = Math.max(2500, words * 400);
+        setTimeout(handleSpeechEnd, estimatedDurationMs + 1000);
+        return;
+      } catch (e) {
+        console.warn('[VoiceBooking] SpeechSynthesis speak exception:', e);
       }
-      return;
-    } catch (e) {
-      console.warn('[VoiceBooking] Audio stream initialization error:', e);
-      fallbackWebSpeech();
     }
-  }, [language, sessionId]);
+
+    handleSpeechEnd();
+  }, [language]);
 
   // ─── Stop Recording Helper ───────────────────────────────────────────────
   const stopRecording = useCallback(() => {
-    // 1. Clear hard safety timeout
     if (hardSafetyTimeoutRef.current) {
       clearTimeout(hardSafetyTimeoutRef.current);
       hardSafetyTimeoutRef.current = null;
     }
-    // 2. Clear VAD polling loop
     if (vadIntervalRef.current) {
       clearInterval(vadIntervalRef.current);
       vadIntervalRef.current = null;
     }
-    // 3. Close AudioContext
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       try {
         audioContextRef.current.close().catch(() => {});
       } catch (e) {}
       audioContextRef.current = null;
     }
-
-    // 4. Stop MediaRecorder
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
         mediaRecorderRef.current.stop();
@@ -226,7 +226,6 @@ export default function VoiceBookingModal({
     setErrorMessage('');
     audioChunksRef.current = [];
 
-    // Stop previous instance if active
     stopRecording();
 
     try {
@@ -250,26 +249,25 @@ export default function VoiceBookingModal({
 
       recorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-        // Stop all tracks to release hardware immediately
         if (mediaStreamRef.current) {
           mediaStreamRef.current.getTracks().forEach((track) => track.stop());
           mediaStreamRef.current = null;
         }
         if (audioBlob.size > 0 && isComponentMountedRef.current) {
-          await submitAnswer({ audioBlob, mimeType });
+          await submitConversationalUtterance({ audioBlob, mimeType });
         }
       };
 
       recorder.start(250);
       setConvState('LISTENING');
 
-      // ─── 1. Hard Safety Cap: Force-stops after 12 seconds ───
+      // Hard safety timeout: 12 seconds cap
       hardSafetyTimeoutRef.current = setTimeout(() => {
-        console.log('[VoiceBooking] 12s safety timeout reached. Auto-submitting audio...');
+        console.log('[VoiceBooking] 12s safety timeout reached. Submitting audio...');
         stopRecording();
       }, 12000);
 
-      // ─── 2. Voice Activity Detection (VAD) via Web Audio API ───
+      // Voice Activity Detection (VAD)
       try {
         const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
         if (AudioCtxClass) {
@@ -285,28 +283,24 @@ export default function VoiceBookingModal({
           hasSpokenRef.current = false;
           lastSpokenTimeRef.current = Date.now();
 
-          // Poll volume every 100ms
           vadIntervalRef.current = setInterval(() => {
             if (!isComponentMountedRef.current) return;
             analyser.getByteFrequencyData(dataArray);
 
-            // Calculate average volume
             let sum = 0;
             for (let i = 0; i < dataArray.length; i++) {
               sum += dataArray[i];
             }
             const avgVolume = sum / dataArray.length;
-
             const now = Date.now();
-            // Human speech threshold (volume > 12 on 0-255 scale)
-            if (avgVolume > 12) {
+
+            if (avgVolume > 14) {
               hasSpokenRef.current = true;
               lastSpokenTimeRef.current = now;
             } else if (hasSpokenRef.current) {
-              // Farmer has stopped speaking: check silence duration
               const silenceDuration = now - lastSpokenTimeRef.current;
               if (silenceDuration > 1800) {
-                console.log(`[VoiceBooking] Auto-stop: ${silenceDuration}ms of silence detected after speech.`);
+                console.log(`[VoiceBooking] Auto-stop: ${silenceDuration}ms silence detected.`);
                 stopRecording();
               }
             }
@@ -317,34 +311,20 @@ export default function VoiceBookingModal({
       }
     } catch (err) {
       console.error('[VoiceBooking] Mic access error:', err);
-      setAudioError('Microphone permission required, or select an option below.');
+      setAudioError('Microphone access required, or type / choose an option below.');
       setConvState('LISTENING');
     }
   }, [stopRecording]);
 
-  // ─── Start Step Interaction (Auto-Play Question -> Auto-Arm Mic) ──────────
-  const triggerStepQuestion = useCallback((qText, stepNum = 1, langCode = language, audioUrl = null) => {
-    stopRecording();
-    setConvState('ASSISTANT_SPEAKING');
-    setTranscript('');
-    setClarification(null);
-
-    // Auto-play question audio, then automatically transition to listening state
-    speakText(qText, stepNum, langCode, audioUrl, () => {
-      setConvState('LISTENING');
-      // Auto-start recording with VAD and 12s safety cap
-      startRecording().catch(() => {});
-    });
-  }, [language, speakText, startRecording, stopRecording]);
-
-  // ─── Initialize Voice Session ─────────────────────────────────────────────
+  // ─── Initialize Conversational Session ───────────────────────────────────
   const initSession = useCallback(async (langToUse = language) => {
     setConvState('INITIALIZING');
     setErrorMessage('');
     setTranscript('');
-    setClarification(null);
+    setMessages([]);
     setCompletedResult(null);
-    setCollectedData({});
+    setLastActionResult(null);
+    setLastActionTaken('none');
 
     try {
       const data = await voiceBookingApi.startSession({
@@ -354,18 +334,20 @@ export default function VoiceBookingModal({
       });
 
       if (data.success) {
-        const initialStep = data.step || 1;
         setSessionId(data.sessionId);
-        setStep(initialStep);
-        setTotalSteps(data.totalSteps || 4);
-        setFieldTitle(data.fieldTitle || 'Procurement Centre');
-        setQuestionText(data.questionText || '');
-        setCollectedData(data.collectedData || {});
+        const greeting = data.initialGreeting || data.questionText || 'Hello! How can I help you today?';
 
-        // Immediately auto-play the Step 1 question
-        triggerStepQuestion(data.questionText, initialStep, langToUse, data.questionAudioUrl);
+        setMessages([
+          { role: 'assistant', text: greeting, timestamp: new Date() }
+        ]);
+
+        // Auto-play initial assistant greeting
+        speakText(greeting, langToUse, () => {
+          setConvState('LISTENING');
+          startRecording().catch(() => {});
+        });
       } else {
-        setErrorMessage(data.message || 'Failed to start voice booking session');
+        setErrorMessage(data.message || 'Failed to start voice assistant');
         setConvState('LISTENING');
       }
     } catch (err) {
@@ -373,7 +355,7 @@ export default function VoiceBookingModal({
       setErrorMessage(err.response?.data?.message || err.message || 'Could not connect to voice service');
       setConvState('LISTENING');
     }
-  }, [farmerName, farmerPhone, language, triggerStepQuestion]);
+  }, [farmerName, farmerPhone, language, speakText, startRecording]);
 
   useEffect(() => {
     isComponentMountedRef.current = true;
@@ -382,13 +364,11 @@ export default function VoiceBookingModal({
     } else {
       stopRecording();
       if (window.speechSynthesis) window.speechSynthesis.cancel();
-      if (audioPlayerRef.current) audioPlayerRef.current.pause();
     }
     return () => {
       isComponentMountedRef.current = false;
       stopRecording();
       if (window.speechSynthesis) window.speechSynthesis.cancel();
-      if (audioPlayerRef.current) audioPlayerRef.current.pause();
     };
   }, [isOpen]);
 
@@ -399,141 +379,91 @@ export default function VoiceBookingModal({
     initSession(newLang);
   };
 
-  // ─── Submit Answer to Gemini Multimodal Engine ───────────────────────────
-  const submitAnswer = async ({ audioBlob, mimeType, textAnswer }) => {
+  // ─── Submit Conversational Utterance to Groq Tool-Calling Engine ──────────
+  const submitConversationalUtterance = async ({ audioBlob, mimeType, textAnswer }) => {
     if (!sessionId) return;
     setConvState('PROCESSING');
     setErrorMessage('');
-    setClarification(null);
 
     try {
+      if (textAnswer) {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'user', text: textAnswer, timestamp: new Date() }
+        ]);
+      }
+
       const res = await voiceBookingApi.sendAnswer(sessionId, {
         audioBlob,
         mimeType,
-        textAnswer
+        textAnswer,
+        language
       });
 
       if (res.success) {
-        // Update collected data using the completed field key
-        if (res.extractedValue) {
-          const completedField = res.completedField || getFieldKey(step);
-          setCollectedData((prev) => ({
+        if (res.transcribedText && !textAnswer) {
+          setTranscript(res.transcribedText);
+          setMessages((prev) => [
             ...prev,
-            [completedField]: res.extractedValue
-          }));
+            { role: 'user', text: res.transcribedText, timestamp: new Date() }
+          ]);
         }
 
-        // ─── Case A: Clarify & Retry (Auto-play clarification audio) ───────
-        if (res.retry) {
-          setTranscript(res.transcript || textAnswer || '');
-          setClarification({
-            text: res.clarifyText,
-            retriesLeft: res.retriesLeft,
-            isExhausted: false
-          });
+        const reply = res.replyText || res.question || 'Processed.';
+        const action = res.actionTaken || 'none';
+        const actionData = res.actionResult || null;
 
-          // Auto-play spoken clarification prompt with exact step number and audio URL
-          speakText(res.clarifyText, step, language, res.clarifyAudioUrl, () => {
-            setConvState('LISTENING');
-            startRecording().catch(() => {});
-          });
-          return;
-        }
+        setLastActionTaken(action);
+        setLastActionResult(actionData);
 
-        // ─── Case B: Retry Exhaustion -> Graceful Fallback to Type / Tap Options ───
-        if (res.fallbackToManual) {
-          setTranscript(res.transcript || textAnswer || '');
-          setShowTypeInput(true); // Automatically expand the Type Instead box
-          setErrorMessage('');
-          setClarification({
-            text: res.message || res.fallbackText || 'Please select below or type your answer.',
-            retriesLeft: 0,
-            isExhausted: true
-          });
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            text: reply,
+            actionTaken: action,
+            actionResult: actionData,
+            timestamp: new Date()
+          }
+        ]);
 
-          // Spoken guidance explaining retries are exhausted and to tap or type
-          const fallbackSpeech = res.message || res.fallbackText;
-          speakText(fallbackSpeech, step, language, null, () => {
-            setConvState('LISTENING');
-          });
-          return;
-        }
-
-        // ─── Case C: All 4 Steps Complete (Token Generated!) ──────────────
-        if (res.complete && res.token) {
-          setTranscript(res.transcript || textAnswer || '');
+        if (action === 'book_slot' && (res.token || actionData?.token)) {
           setCompletedResult(res);
-          setConvState('COMPLETED');
-
-          // Celebratory confirmation spoken audio
-          const victoryText = language === 'mr'
-            ? 'अभिनंदन! तुमचा स्लॉट यशस्वीरित्या बुक झाला आहे.'
-            : language === 'hi'
-            ? 'बधाई हो! आपका स्लॉट सफलतापूर्वक बुक हो गया है.'
-            : 'Congratulations! Your slot booking has been confirmed.';
-          speakText(victoryText, 4, language, null, () => {});
-          return;
         }
 
-        // ─── Case D: Next Step Progression (Auto-play next question) ───────
-        const nextStepNum = res.step;
-        setTranscript('');
-        setStep(nextStepNum);
-        setFieldTitle(res.fieldTitle || 'Step');
-        setQuestionText(res.nextQuestionText || '');
-
-        // Immediately auto-play next question with exact step number and audio URL
-        triggerStepQuestion(res.nextQuestionText, nextStepNum, language, res.nextQuestionAudioUrl);
+        // Auto-play spoken response
+        speakText(reply, language, () => {
+          setConvState('LISTENING');
+          startRecording().catch(() => {});
+        });
       } else {
-        setErrorMessage(res.message || 'Could not understand response. Please try again.');
+        setErrorMessage(res.message || 'Could not understand request.');
         setConvState('LISTENING');
       }
     } catch (err) {
-      console.error('[VoiceBooking] Submit answer error:', err);
-      setErrorMessage(err.response?.data?.message || err.message || 'Error communicating with Gemini');
+      console.error('[VoiceBooking] Conversational submit error:', err);
+      setErrorMessage(err.response?.data?.message || err.message || 'Error communicating with Voice AI');
       setConvState('LISTENING');
     }
   };
 
-  const getFieldKey = (stepNum) => {
-    switch (stepNum) {
-      case 1: return 'centre';
-      case 2: return 'crop';
-      case 3: return 'quantity';
-      case 4: return 'slot';
-      default: return 'data';
-    }
+  const handleManualTextSubmit = (e) => {
+    e.preventDefault();
+    if (!manualText.trim()) return;
+    const text = manualText.trim();
+    setManualText('');
+    setShowTypeInput(false);
+    submitConversationalUtterance({ textAnswer: text });
   };
 
-  // Replay question audio manually if farmer requests
-  const handleReplayAudio = () => {
-    if (questionText) {
-      triggerStepQuestion(questionText, step, language);
-    }
-  };
-
-  // Handle finalize and close
   const handleFinishBooking = () => {
-    if (completedResult?.token) {
-      onConfirmBooking(completedResult.token);
+    if (onConfirmBooking && completedResult) {
+      onConfirmBooking(completedResult.token || completedResult.booking, completedResult.actionResult);
     }
     onClose();
   };
 
-  // Manual text submit
-  const handleManualTextSubmit = (e) => {
-    e.preventDefault();
-    if (manualText.trim()) {
-      submitAnswer({ textAnswer: manualText.trim() });
-      setManualText('');
-      setShowTypeInput(false);
-    }
-  };
-
   if (!isOpen) return null;
-
-  const currentFieldKey = getFieldKey(step);
-  const quickOptions = SUGGESTED_RESPONSES[currentFieldKey] || [];
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
@@ -562,16 +492,18 @@ export default function VoiceBookingModal({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="font-bold text-sm text-white">Voice Booking Conversation</h3>
+                <h3 className="font-bold text-sm text-white">
+                  {language === 'mr' ? 'किसान व्हॉइस सहाय्यक' : language === 'hi' ? 'किसान वॉयस सहायक' : 'KisanQ Voice Assistant'}
+                </h3>
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300">
-                  <Sparkles className="w-2.5 h-2.5" /> Hands-Free AI
+                  <Sparkles className="w-2.5 h-2.5" /> Groq AI
                 </span>
               </div>
-              <p className="text-[10px] text-slate-400 font-medium">Auto-Speaks · Auto-Listens</p>
+              <p className="text-[10px] text-slate-400 font-medium">Free-Form Natural Conversation · 7 Actions</p>
             </div>
           </div>
 
-          {/* Language Switcher Pills */}
+          {/* Language Switcher & Close */}
           <div className="flex items-center gap-3">
             <div className="flex bg-slate-800 p-1 rounded-xl border border-slate-700">
               {LANGUAGES.map((l) => (
@@ -600,169 +532,213 @@ export default function VoiceBookingModal({
           </div>
         </div>
 
-        {/* Modal Scrollable Body */}
-        <div className="p-6 overflow-y-auto space-y-6">
+        {/* Modal Scrollable Conversational Thread */}
+        <div className="p-6 overflow-y-auto space-y-4 flex-1">
           {convState === 'INITIALIZING' ? (
             <div className="py-16 text-center space-y-3">
               <Loader2 className="w-8 h-8 text-emerald-400 animate-spin mx-auto" />
-              <p className="text-xs text-slate-300 font-medium">Starting voice conversation in {language === 'mr' ? 'Marathi' : language === 'hi' ? 'Hindi' : 'English'}…</p>
-            </div>
-          ) : completedResult ? (
-            /* ─── SUCCESS / COMPLETED TOKEN VIEW ─── */
-            <div className="space-y-6 animate-fadeIn">
-              <div className="text-center space-y-2">
-                <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-emerald-500 to-teal-400 text-slate-950 flex items-center justify-center mx-auto shadow-xl shadow-emerald-500/30 font-black">
-                  <CheckCircle2 className="w-9 h-9" />
-                </div>
-                <h4 className="text-xl font-black text-white">
-                  {language === 'mr' ? 'स्लॉट यशस्वीरित्या बुक झाला!' : language === 'hi' ? 'स्लॉट सफलतापूर्वक बुक हो गया!' : 'Slot Booked Successfully!'}
-                </h4>
-                <p className="text-xs text-emerald-400 font-semibold">
-                  {language === 'mr' ? 'तुमचे टोकन तयार झाले आहे' : 'Official APMC Queue Token Generated'}
-                </p>
-              </div>
-
-              {/* Token Card */}
-              <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-5 space-y-4 shadow-lg">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-700">
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Token Number</span>
-                    <p className="text-lg font-mono font-black text-emerald-400">{completedResult.token?.tokenNumber || completedResult.token?.id}</p>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Queue Position</span>
-                    <p className="text-lg font-mono font-black text-amber-300">#{completedResult.token?.queuePosition || 1}</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div className="space-y-1">
-                    <span className="text-slate-400 flex items-center gap-1.5"><Building2 className="w-3.5 h-3.5 text-emerald-400" /> Mandi Centre</span>
-                    <p className="font-bold text-white">{completedResult.token?.mandiName || 'APMC Kopargaon'}</p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-slate-400 flex items-center gap-1.5"><Leaf className="w-3.5 h-3.5 text-emerald-400" /> Commodity & Qty</span>
-                    <p className="font-bold text-white">{completedResult.token?.crop} · {completedResult.token?.quantity} Qtl</p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-slate-400 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-emerald-400" /> Slot Date & Time</span>
-                    <p className="font-bold text-white">{completedResult.token?.slotDate} ({completedResult.token?.slotTime})</p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-slate-400 flex items-center gap-1.5"><ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Intake Channel</span>
-                    <p className="font-bold text-emerald-300">Conversational AI</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Action Button */}
-              <button
-                type="button"
-                onClick={handleFinishBooking}
-                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-sm transition-all shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-2"
-              >
-                <Ticket className="w-4 h-4" /> View Live Token HUD
-              </button>
+              <p className="text-xs text-slate-300 font-medium">Connecting with KisanQ Voice Assistant…</p>
             </div>
           ) : (
-            /* ─── ACTIVE CONVERSATION FLOW ─── */
-            <div className="space-y-5">
-              {/* Step Progress Chips */}
-              <div className="grid grid-cols-4 gap-2">
-                {['Mandi', 'Crop', 'Quantity', 'Slot'].map((stg, idx) => {
-                  const sNum = idx + 1;
-                  const isDone = sNum < step;
-                  const isCurrent = sNum === step;
-                  return (
+            <>
+              {/* Message List */}
+              <div className="space-y-4">
+                {messages.map((msg, idx) => (
+                  <div
+                    key={idx}
+                    className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'} animate-fadeIn`}
+                  >
                     <div
-                      key={stg}
-                      className={`p-2 rounded-xl border text-center transition-all ${
-                        isDone
-                          ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-400'
-                          : isCurrent
-                          ? 'bg-slate-800 border-emerald-400 text-white shadow-xs'
-                          : 'bg-slate-800/40 border-slate-700/40 text-slate-500'
+                      className={`max-w-[85%] rounded-2xl p-4 text-xs leading-relaxed ${
+                        msg.role === 'user'
+                          ? 'bg-emerald-600 text-white rounded-br-xs shadow-md'
+                          : 'bg-slate-800 border border-slate-700 text-slate-200 rounded-bl-xs shadow-lg'
                       }`}
                     >
-                      <div className="flex items-center justify-center gap-1 text-[10px] font-bold">
-                        {isDone ? <Check className="w-3 h-3 text-emerald-400" /> : `Step ${sNum}`}
+                      <div className="flex items-center gap-1.5 mb-1 text-[10px] font-bold opacity-75">
+                        {msg.role === 'user' ? (
+                          <span>👨‍🌾 {farmerName}</span>
+                        ) : (
+                          <span className="text-emerald-400 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" /> KisanQ Assistant
+                          </span>
+                        )}
                       </div>
-                      <p className="text-[11px] font-bold truncate">{stg}</p>
+                      <p className="whitespace-pre-wrap font-medium">{msg.text}</p>
                     </div>
-                  );
-                })}
-              </div>
 
-              {/* Question Banner with Replay Icon */}
-              <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-4 space-y-2 relative">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider flex items-center gap-1.5">
-                    <Radio className="w-3 h-3 animate-ping text-emerald-400" /> Step {step} of {totalSteps}: {fieldTitle}
-                  </span>
+                    {/* Rich Action Result Cards embedded in Assistant Message */}
+                    {msg.actionResult && (
+                      <div className="mt-2 w-full max-w-[90%]">
+                        {/* 1. BOOKING CONFIRMATION CARD */}
+                        {msg.actionTaken === 'book_slot' && msg.actionResult.tokenNumber && (
+                          <div className="bg-emerald-950/60 border border-emerald-500/40 rounded-2xl p-4 text-xs space-y-3 shadow-lg">
+                            <div className="flex items-center justify-between pb-2 border-b border-emerald-500/20">
+                              <span className="text-[10px] uppercase font-bold text-emerald-400">✅ Booking Confirmed</span>
+                              <span className="font-mono font-black text-emerald-300 text-sm">{msg.actionResult.tokenNumber}</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-[11px]">
+                              <div><span className="text-slate-400">Mandi:</span> <strong className="text-white">{msg.actionResult.mandiName}</strong></div>
+                              <div><span className="text-slate-400">Crop & Qty:</span> <strong className="text-white">{msg.actionResult.crop} · {msg.actionResult.quantity} Qtl</strong></div>
+                              <div><span className="text-slate-400">Slot Date:</span> <strong className="text-white">{msg.actionResult.slotDate}</strong></div>
+                              <div><span className="text-slate-400">Slot Time:</span> <strong className="text-white">{msg.actionResult.slotTime}</strong></div>
+                            </div>
+                          </div>
+                        )}
 
-                  {/* Replay Button */}
-                  <button
-                    type="button"
-                    onClick={handleReplayAudio}
-                    className="flex items-center gap-1 text-[11px] font-bold text-slate-400 hover:text-emerald-300 transition-colors bg-slate-700/60 hover:bg-slate-700 px-2.5 py-1 rounded-lg"
-                    title="Replay question"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    <span>Replay</span>
-                  </button>
-                </div>
+                        {/* 2. CROP PRICE / MSP CARD */}
+                        {msg.actionTaken === 'check_crop_price' && (
+                          <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-4 text-xs space-y-2 shadow-lg">
+                            <div className="flex items-center justify-between pb-2 border-b border-slate-700">
+                              <span className="text-[10px] uppercase font-bold text-amber-400 flex items-center gap-1">
+                                <TrendingUp className="w-3.5 h-3.5" /> Mandi MSP & Market Rates
+                              </span>
+                              <span className="font-bold text-slate-300">{msg.actionResult.mandiName}</span>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-center py-1">
+                              <div className="bg-slate-900/60 p-2 rounded-xl">
+                                <span className="text-[10px] text-slate-400 block">MSP (हमीभाव)</span>
+                                <strong className="text-emerald-400 text-xs">₹{msg.actionResult.statutoryMSP}</strong>
+                              </div>
+                              <div className="bg-slate-900/60 p-2 rounded-xl">
+                                <span className="text-[10px] text-slate-400 block">Today (आज)</span>
+                                <strong className="text-amber-300 text-xs">₹{msg.actionResult.marketPriceToday}</strong>
+                              </div>
+                              <div className="bg-slate-900/60 p-2 rounded-xl">
+                                <span className="text-[10px] text-slate-400 block">Trend (प्रवाह)</span>
+                                <strong className="text-teal-400 text-xs">{msg.actionResult.priceTrend === 'UP' ? '📈 Rising' : '📉 Stable'}</strong>
+                              </div>
+                            </div>
+                          </div>
+                        )}
 
-                <h4 className="text-base font-bold text-white leading-relaxed">
-                  {questionText || 'Please speak your response...'}
-                </h4>
+                        {/* 3. QUEUE POSITION CARD */}
+                        {msg.actionTaken === 'check_queue_position' && (
+                          <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-4 text-xs space-y-2 shadow-lg">
+                            <div className="flex items-center justify-between pb-2 border-b border-slate-700">
+                              <span className="text-[10px] uppercase font-bold text-teal-400 flex items-center gap-1">
+                                <Clock className="w-3.5 h-3.5" /> Live Queue Status
+                              </span>
+                              <span className="font-mono text-emerald-400 font-bold">{msg.actionResult.tokenNumber}</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-[11px] py-1">
+                              <div><span className="text-slate-400">Position in Queue:</span> <strong className="text-amber-300 font-black">#{msg.actionResult.queuePosition}</strong></div>
+                              <div><span className="text-slate-400">Est. Wait:</span> <strong className="text-white">{msg.actionResult.estimatedWaitTime}</strong></div>
+                              <div className="col-span-2"><span className="text-slate-400">Current Stage:</span> <strong className="text-emerald-300">{msg.actionResult.currentStage}</strong></div>
+                            </div>
+                          </div>
+                        )}
 
-                {clarification && (
-                  <div className={`mt-2 p-2.5 border rounded-xl text-xs flex items-start gap-2 animate-fadeIn ${
-                    clarification.isExhausted
-                      ? 'bg-rose-950/70 border-rose-500/40 text-rose-300'
-                      : 'bg-amber-950/70 border-amber-500/40 text-amber-300'
-                  }`}>
-                    <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${clarification.isExhausted ? 'text-rose-400' : 'text-amber-400'}`} />
-                    <div>
-                      <p className="font-bold">
-                        {clarification.isExhausted
-                          ? (language === 'mr' ? 'पर्याय निवडा (पुन्हा प्रयत्न संपले):' : language === 'hi' ? 'विकल्प चुनें (प्रयास समाप्त):' : 'Select an Option (Retries Exhausted):')
-                          : (language === 'mr' ? 'पुन्हा सांगा:' : language === 'hi' ? 'पुनः बताएं:' : 'Clarification:')}
-                      </p>
-                      <p>{clarification.text}</p>
-                    </div>
+                        {/* 4. TOKEN 5-STAGE PROGRESS CARD */}
+                        {msg.actionTaken === 'check_token_status' && (
+                          <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-4 text-xs space-y-2.5 shadow-lg">
+                            <div className="flex items-center justify-between pb-2 border-b border-slate-700">
+                              <span className="text-[10px] uppercase font-bold text-emerald-400 flex items-center gap-1">
+                                <ShieldCheck className="w-3.5 h-3.5" /> 5-Stage Checkpoint Tracker
+                              </span>
+                              <span className="font-mono text-xs text-slate-300">{msg.actionResult.tokenNumber}</span>
+                            </div>
+                            <div className="space-y-1.5">
+                              {msg.actionResult.stages?.map((stg, sIdx) => (
+                                <div key={sIdx} className="flex items-center justify-between text-[11px] bg-slate-900/50 px-2.5 py-1.5 rounded-lg">
+                                  <span className="flex items-center gap-1.5 text-slate-300">
+                                    <span className="w-4 h-4 rounded-full bg-slate-800 text-[10px] font-bold flex items-center justify-center text-emerald-400">{stg.index}</span>
+                                    {stg.title}
+                                  </span>
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                    stg.status === 'Completed' ? 'bg-emerald-500/20 text-emerald-400' : stg.status === 'In Progress' ? 'bg-amber-500/20 text-amber-400 animate-pulse' : 'bg-slate-800 text-slate-500'
+                                  }`}>
+                                    {stg.status}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 5. PAYOUT / DBT STATUS CARD */}
+                        {msg.actionTaken === 'check_payout_status' && (
+                          <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-4 text-xs space-y-2 shadow-lg">
+                            <div className="flex items-center justify-between pb-2 border-b border-slate-700">
+                              <span className="text-[10px] uppercase font-bold text-amber-400 flex items-center gap-1">
+                                <Banknote className="w-3.5 h-3.5" /> DBT Payout Summary
+                              </span>
+                              <span className="font-mono text-xs text-slate-300">{msg.actionResult.tokenNumber}</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-[11px]">
+                              <div><span className="text-slate-400">Net Quantity:</span> <strong className="text-white">{msg.actionResult.netWeightQuintals} Qtl</strong></div>
+                              <div><span className="text-slate-400">Total Payout:</span> <strong className="text-emerald-400 font-bold text-xs">{msg.actionResult.totalPayoutAmount}</strong></div>
+                              <div className="col-span-2 text-[10px] text-slate-400"><span className="text-slate-400">Bank Channel:</span> <strong className="text-slate-300">{msg.actionResult.bankAccount}</strong></div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 6. HELP & SUPPORT INFO CARD */}
+                        {msg.actionTaken === 'get_support_info' && (
+                          <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-4 text-xs space-y-3 shadow-lg">
+                            <div className="flex items-center justify-between pb-2 border-b border-slate-700">
+                              <span className="text-[10px] uppercase font-bold text-teal-400 flex items-center gap-1">
+                                <HelpCircle className="w-3.5 h-3.5" /> KisanQ Help & Support
+                              </span>
+                              <span className="text-[10px] text-emerald-400 font-bold">24x7 Available</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <a
+                                href={`tel:${msg.actionResult.helplineTollFree}`}
+                                className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors"
+                              >
+                                <Phone className="w-3.5 h-3.5" /> Toll-Free Call
+                              </a>
+                              <a
+                                href={msg.actionResult.whatsappChatUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs transition-colors"
+                              >
+                                <MessageSquare className="w-3.5 h-3.5" /> WhatsApp Chat
+                              </a>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 7. CANCELLATION CARD */}
+                        {msg.actionTaken === 'cancel_booking' && (
+                          <div className="bg-rose-950/60 border border-rose-500/40 rounded-2xl p-4 text-xs space-y-2 shadow-lg">
+                            <div className="flex items-center justify-between pb-2 border-b border-rose-500/20">
+                              <span className="text-[10px] uppercase font-bold text-rose-400 flex items-center gap-1">
+                                <XCircle className="w-3.5 h-3.5" /> Booking Cancelled
+                              </span>
+                              <span className="font-mono text-xs text-rose-300">{msg.actionResult.tokenNumber}</span>
+                            </div>
+                            <p className="text-[11px] text-slate-300">{msg.actionResult.message || 'Slot released.'}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                )}
+                ))}
+                <div ref={chatBottomRef} />
               </div>
 
-              {/* Central Conversational Visualizer & Turn State */}
-              <div className="text-center space-y-4 py-2">
-                
-                {/* Visual Orb */}
-                <div className="relative w-28 h-28 mx-auto flex items-center justify-center">
-                  
-                  {/* Assistant Speaking state */}
+              {/* Central Mic & Turn Visualizer */}
+              <div className="text-center space-y-3 pt-2">
+                <div className="relative w-24 h-24 mx-auto flex items-center justify-center">
                   {convState === 'ASSISTANT_SPEAKING' && (
                     <>
                       <div className="absolute inset-0 rounded-full border-2 border-teal-400/50 animate-ping opacity-75" />
                       <div className="absolute -inset-3 rounded-full border border-teal-400/30 animate-pulse" />
                     </>
                   )}
-
-                  {/* Farmer Speaking / Mic Listening state */}
                   {convState === 'LISTENING' && (
                     <>
                       <div className="absolute inset-0 rounded-full border-2 border-rose-500 animate-ping opacity-75" />
                       <div className="absolute -inset-3 rounded-full border border-rose-400/40 animate-pulse" />
                     </>
                   )}
-
-                  {/* Processing with Gemini */}
                   {convState === 'PROCESSING' && (
                     <div className="absolute -inset-2 rounded-full border-2 border-emerald-400 border-t-transparent animate-spin" />
                   )}
 
-                  {/* Interactive Mic Button */}
                   <button
                     type="button"
                     onClick={() => {
@@ -770,7 +746,6 @@ export default function VoiceBookingModal({
                         stopRecording();
                       } else if (convState === 'ASSISTANT_SPEAKING') {
                         if (window.speechSynthesis) window.speechSynthesis.cancel();
-                        if (audioPlayerRef.current) audioPlayerRef.current.pause();
                         setConvState('LISTENING');
                         startRecording().catch(() => {});
                       } else {
@@ -778,7 +753,7 @@ export default function VoiceBookingModal({
                       }
                     }}
                     disabled={convState === 'PROCESSING'}
-                    className={`w-24 h-24 rounded-full flex items-center justify-center shadow-xl transition-all ${
+                    className={`w-20 h-20 rounded-full flex items-center justify-center shadow-xl transition-all ${
                       convState === 'ASSISTANT_SPEAKING'
                         ? 'bg-gradient-to-tr from-teal-600 to-cyan-500 text-slate-950 shadow-teal-500/30'
                         : convState === 'LISTENING'
@@ -789,40 +764,39 @@ export default function VoiceBookingModal({
                     }`}
                   >
                     {convState === 'PROCESSING' ? (
-                      <Loader2 className="w-10 h-10 animate-spin text-emerald-400" />
+                      <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
                     ) : convState === 'ASSISTANT_SPEAKING' ? (
-                      <Volume2 className="w-10 h-10 animate-pulse text-slate-950" />
+                      <Volume2 className="w-8 h-8 animate-pulse text-slate-950" />
                     ) : (
-                      <Mic className="w-10 h-10" />
+                      <Mic className="w-8 h-8" />
                     )}
                   </button>
                 </div>
 
                 {/* State Label & Guidance */}
-                <div className="space-y-1.5">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold tracking-wide">
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-bold tracking-wide">
                     {convState === 'ASSISTANT_SPEAKING' ? (
                       <span className="text-teal-300 flex items-center gap-1.5">
                         <Volume2 className="w-3.5 h-3.5 animate-pulse" />
-                        {language === 'mr' ? 'AI सहाय्यक विचारत आहे…' : language === 'hi' ? 'AI सहायक पूछ रहा है…' : 'AI Assistant is speaking…'}
+                        {language === 'mr' ? 'AI सहाय्यक बोलत आहे…' : language === 'hi' ? 'AI सहायक बोल रहा है…' : 'AI Assistant is speaking…'}
                       </span>
                     ) : convState === 'LISTENING' ? (
                       <span className="bg-rose-500/20 text-rose-300 border border-rose-500/40 px-3 py-0.5 rounded-full flex items-center gap-1.5 animate-pulse">
                         <Radio className="w-3 h-3 text-rose-400 animate-ping" />
-                        {language === 'mr' ? 'तुमची वेळ आहे — आता बोला' : language === 'hi' ? 'आपकी बारी — अब बोलें' : 'Your turn — speak now'}
+                        {language === 'mr' ? 'आता बोला — आम्ही ऐकत आहोत' : language === 'hi' ? 'अब बोलिए — हम सुन रहे हैं' : 'Your turn — speak naturally now'}
                       </span>
                     ) : convState === 'PROCESSING' ? (
                       <span className="text-emerald-400 flex items-center gap-1.5">
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        {language === 'mr' ? 'तुमचे उत्तर तपासत आहे…' : 'Analyzing response with Gemini AI…'}
+                        {language === 'mr' ? 'Groq AI तपासत आहे…' : 'Processing with Groq AI…'}
                       </span>
                     ) : null}
                   </div>
 
-                  {/* Animated Waveform when listening */}
                   {convState === 'LISTENING' && (
-                    <div className="flex items-center justify-center gap-1.5 h-6 py-1">
-                      {[40, 80, 100, 60, 95, 75, 45].map((h, i) => (
+                    <div className="flex items-center justify-center gap-1.5 h-5 py-0.5">
+                      {[30, 70, 100, 50, 90, 65, 40].map((h, i) => (
                         <span
                           key={i}
                           className="w-1 bg-gradient-to-t from-rose-500 to-amber-300 rounded-full animate-pulse"
@@ -835,52 +809,17 @@ export default function VoiceBookingModal({
                       ))}
                     </div>
                   )}
-
-                  {convState === 'LISTENING' && (
-                    <p className="text-[11px] text-slate-400 font-medium">
-                      {language === 'mr' ? 'बोलून झाल्यावर खालील बटनावर टॅप करा किंवा थांबा' : 'Speak clearly into the microphone'}
-                    </p>
-                  )}
                 </div>
 
-                {transcript && (
-                  <div className="p-3 bg-slate-800/80 border border-slate-700 rounded-xl text-xs text-slate-300 max-w-md mx-auto">
-                    <span className="text-[10px] uppercase font-bold text-emerald-400 block mb-1">Recognized Utterance:</span>
-                    <p className="italic font-medium">"{transcript}"</p>
-                  </div>
-                )}
-
-                {audioError && (
-                  <p className="text-xs text-amber-400 font-medium bg-amber-950/40 p-2 rounded-lg border border-amber-500/30 max-w-md mx-auto">
-                    {audioError}
-                  </p>
-                )}
-                {errorMessage && (
-                  <p className="text-xs text-rose-400 font-medium bg-rose-950/40 p-2 rounded-lg border border-rose-500/30 max-w-md mx-auto">
-                    {errorMessage}
-                  </p>
-                )}
+                {audioError && <p className="text-xs text-amber-400 font-medium">{audioError}</p>}
+                {errorMessage && <p className="text-xs text-rose-400 font-medium">{errorMessage}</p>}
               </div>
 
-              {/* Stop Speaking / Done Action Button */}
-              {convState === 'LISTENING' && (
-                <div className="flex justify-center">
-                  <button
-                    type="button"
-                    onClick={stopRecording}
-                    className="px-6 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs transition-all flex items-center gap-2"
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>{language === 'mr' ? 'बोलणे पूर्ण झाले' : language === 'hi' ? 'बोलना पूरा हुआ' : 'Done Speaking'}</span>
-                  </button>
-                </div>
-              )}
-
-              {/* Quick Simulated Response Chips (Tap Fallback) */}
+              {/* Quick Action Suggestion Chips */}
               <div className="space-y-2 pt-2 border-t border-slate-800">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                    Quick One-Tap Options:
+                    {language === 'mr' ? 'जलद पर्याय (टॅप करू शकता):' : language === 'hi' ? 'त्वरित विकल्प:' : 'Quick Actions (1-Tap):'}
                   </span>
                   <button
                     type="button"
@@ -898,7 +837,7 @@ export default function VoiceBookingModal({
                       type="text"
                       value={manualText}
                       onChange={(e) => setManualText(e.target.value)}
-                      placeholder={language === 'mr' ? 'तुमचे उत्तर येथे टाइप करा…' : 'Type your answer here…'}
+                      placeholder={language === 'mr' ? 'उदा. कोपरगावला २५ क्विंटल सोयाबीन बुक करा, किंवा भाव सांगा…' : 'e.g. Book 25 Qtl Soybean slot, or check prices…'}
                       className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-hidden focus:border-emerald-500"
                     />
                     <button
@@ -910,18 +849,17 @@ export default function VoiceBookingModal({
                     </button>
                   </form>
                 ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {quickOptions.map((opt, i) => {
+                  <div className="flex flex-wrap gap-1.5">
+                    {ACTION_PROMPTS.map((opt) => {
                       const text = opt[language] || opt.en;
                       return (
                         <button
-                          key={i}
+                          key={opt.id}
                           type="button"
                           disabled={convState === 'PROCESSING'}
-                          onClick={() => submitAnswer({ textAnswer: text })}
-                          className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 hover:border-emerald-500/50 transition-all flex items-center gap-1.5 disabled:opacity-50"
+                          onClick={() => submitConversationalUtterance({ textAnswer: text })}
+                          className="px-2.5 py-1.5 rounded-xl text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 hover:border-emerald-500/50 transition-all flex items-center gap-1.5 disabled:opacity-50"
                         >
-                          <Mic className="w-3 h-3 text-emerald-400" />
                           <span>{text}</span>
                         </button>
                       );
@@ -929,24 +867,22 @@ export default function VoiceBookingModal({
                   </div>
                 )}
               </div>
-            </div>
+            </>
           )}
         </div>
 
         {/* Modal Footer Bar */}
         <div className="px-6 py-3 border-t border-slate-800 bg-slate-900/95 flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => initSession(language)}
-              className="text-slate-400 hover:text-white flex items-center gap-1 font-semibold transition-colors"
-              title="Restart session"
-            >
-              <RotateCcw className="w-3.5 h-3.5" /> Restart
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => initSession(language)}
+            className="text-slate-400 hover:text-white flex items-center gap-1 font-semibold transition-colors"
+            title="Restart conversation"
+          >
+            <RotateCcw className="w-3.5 h-3.5" /> Restart
+          </button>
           <span className="text-[10px] text-slate-500 font-medium">
-            KisanQ Multimodal Voice Assayer · Fully Conversational
+            KisanQ AI Assistant · Powered by Groq Tool-Calling
           </span>
         </div>
 
